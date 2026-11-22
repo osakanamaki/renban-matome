@@ -1,5 +1,5 @@
 --label:連番まとめ
---information:連番まとめ（値） v0.2.0
+--information:連番まとめ（値） v0.3.0
 --require:2011700
 --group:値1,true
 --track@value1:値1::値,-1,999,0,1
@@ -29,9 +29,10 @@
 -- 表示する画像 = 先頭画像のファイル名の、拡張子の直前の数字に、表示番号を足した番号の画像
 -- 表示番号が負、上限を超える、または画像が無いときは、そのスロットは何も表示しない（意図的な非表示）。
 --
--- 個別オブジェクトの番号（obj.index）:
---   このオブジェクトに付いた連番スロットの、上から何番目か（1番目が 0）。
---   案内を表示するときは、案内が最後の番号になる。
+-- 描き方:
+--   連番スロット1つを1つの個別オブジェクトとして描き、スロットの X・Y・拡大率を反映する。
+--   案内を表示するときは、案内を最後の個別オブジェクトとして、土台の位置に描く。
+--   個別オブジェクトの番号は利用者との取り決めにしない（要件 RM-F18 は取り下げ）。
 
 local VALUE_COUNT = 4
 -- 自分より下のフィルタ効果を何個まで調べるか。範囲外も「スクリプト以外」も空のテキストになり区別できないため、上限を決める。
@@ -122,6 +123,15 @@ local function find_slot_effects()
 	return slot_effects
 end
 
+-- 連番スロット1つの、位置と大きさの設定を読む。
+-- 戻り値: { x = 土台からのずれ, y = 土台からのずれ, scale = 倍率（1.0 が等倍） }
+local function read_slot_placement(effect_key)
+	local position_x = tonumber(obj.getvalue(effect_key, "X")) or 0
+	local position_y = tonumber(obj.getvalue(effect_key, "Y")) or 0
+	local scale_percent = tonumber(obj.getvalue(effect_key, "拡大率")) or 100
+	return { x = position_x, y = position_y, scale = scale_percent / 100 }
+end
+
 -- 連番スロット1つの設定を読み、表示する画像のパスを決める。
 -- 戻り値: 画像のパス（表示しないときは nil）、案内の文（不備が無いときは nil）
 local function resolve_slot(effect_key, values)
@@ -190,6 +200,7 @@ end
 -- 連番スロットごとに、表示する画像と、案内の文を決める。
 local slot_effects = find_slot_effects()
 local image_paths = {}
+local placements = {}
 local guide_lines = {}
 local has_any_first_image = false
 for slot_index = 1, #slot_effects do
@@ -200,6 +211,7 @@ for slot_index = 1, #slot_effects do
 	end
 	local image_path, guide_line = resolve_slot(effect_key, values)
 	image_paths[slot_index] = image_path
+	placements[slot_index] = read_slot_placement(effect_key)
 	if guide_line ~= nil then
 		guide_lines[#guide_lines + 1] = guide_line
 	end
@@ -214,7 +226,7 @@ local show_guide = #guide_lines > 0 and should_show_guide()
 local slot_count = #slot_effects
 local object_count = slot_count
 if show_guide then
-	-- 案内は、連番スロットの番号をずらさないよう、最後の個別オブジェクトにする。
+	-- 案内は、最後の個別オブジェクトにする。
 	object_count = slot_count + 1
 end
 if object_count == 0 then
@@ -235,5 +247,11 @@ obj.multiobject(object_count, function()
 	end
 	if not loaded then
 		obj.alpha = 0
+		return
 	end
+	-- 位置と大きさは、画像を読み込んだ後に設定する（obj.load() で元に戻るため）。
+	local placement = placements[slot_index]
+	obj.ox = obj.ox + placement.x
+	obj.oy = obj.oy + placement.y
+	obj.zoom = obj.zoom * placement.scale
 end)

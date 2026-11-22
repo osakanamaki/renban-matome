@@ -12,7 +12,6 @@ from PIL import Image, ImageChops
 
 BASE = "連番まとめ（値）"
 SLOT = "連番スロット"
-SHIFT_BY_INDEX = "_試験_番号で横にずらす"
 READ_EXPORTED = "_試験_公開値を読む"
 
 SAMPLES = Path(__file__).parent.parent / "samples"
@@ -53,21 +52,26 @@ def slot(
     source: int = 1,
     offset: int = 0,
     limit: int | None = None,
+    x: float = 0,
+    y: float = 0,
+    scale: float = 100,
     name: str = SLOT,
 ) -> Effect:
-    """連番スロット。limit が None なら上限を使わない。"""
-    params: dict[str, object] = {"画像": image, "従う値": f"値{source}", "オフセット": str(offset)}
+    """連番スロット。limit が None なら上限を使わない。x・y は土台からのずれ、scale は拡大率（%）。"""
+    params: dict[str, object] = {
+        "画像": image,
+        "従う値": f"値{source}",
+        "オフセット": str(offset),
+        "X": f"{x:.1f}",
+        "Y": f"{y:.1f}",
+        "拡大率": f"{scale:.2f}",
+    }
     if limit is None:
         params["上限を使う"] = "0"
     else:
         params["上限を使う"] = "1"
         params["上限"] = str(limit)
     return Effect(name, params)
-
-
-def shift_by_index(step: int) -> Effect:
-    """個別オブジェクトを、番号 × step だけ右へずらす。スロットどうしを重ならないようにする。"""
-    return Effect(SHIFT_BY_INDEX, {"間隔": f"{step}.00"})
 
 
 def project(
@@ -124,11 +128,8 @@ def test_slots_following_same_value_switch_together(aviutl2: AviUtl2) -> None:
     """同じ値に従う複数の連番スロットは、値を変えると表示画像が同時に切り替わる。"""
     effect = base("0.00,10.00,直線移動,0")
 
-    # スロットは本来同じ位置に重なるので、番号でずらして別々に確かめる。
-    # バー（番号0）は中央 x=640、数字（番号1）は 300 右の x=940。
-    result = aviutl2.render(
-        project(effect, slot(BAR), slot(NUMBER), shift_by_index(300), width=1280, end=10), [0, 5, 10]
-    )
+    # バーは中央 x=640、数字は X で 300 右の x=940 に置いて、別々に確かめる。
+    result = aviutl2.render(project(effect, slot(BAR), slot(NUMBER, x=300), width=1280, end=10), [0, 5, 10])
 
     for frame in (0, 5, 10):
         assert count_pixels(result.images[frame], BAR_GREEN) == bar_pixels(frame), f"frame {frame}"
@@ -139,13 +140,12 @@ def test_slots_follow_only_their_own_value(aviutl2: AviUtl2) -> None:
     """値1と値2に従う連番スロットは、それぞれの値だけに従って切り替わる（中間点も各自の値のもの）。"""
     effect = base(3, "0.00,10.00,0.00,直線移動,0")
 
-    # 数字（番号0、値1）は中央 x=640、バー（番号1、値2）は 300 右。
+    # 数字（値1）は中央 x=640、バー（値2）は 300 右。
     result = aviutl2.render(
         project(
             effect,
             slot(NUMBER, source=1),
-            slot(BAR, source=2),
-            shift_by_index(300),
+            slot(BAR, source=2, x=300),
             width=1280,
             end=10,
             midpoints=(5,),
@@ -164,9 +164,9 @@ def test_value_3_and_4_can_be_followed(aviutl2: AviUtl2) -> None:
     """値3・値4にも従える。"""
     effect = base(0, 0, 4, 8)
 
-    # バー（番号0、値3）は中央 x=640、数字（番号1、値4）は 300 右の x=940。
+    # バー（値3）は中央 x=640、数字（値4）は 300 右の x=940。
     image = aviutl2.render(
-        project(effect, slot(BAR, source=3), slot(NUMBER, source=4), shift_by_index(300), width=1280), [0]
+        project(effect, slot(BAR, source=3), slot(NUMBER, source=4, x=300), width=1280), [0]
     ).images[0]
 
     assert count_pixels(image, BAR_GREEN) == bar_pixels(4)
@@ -231,24 +231,40 @@ def test_unset_slots_are_not_an_error(aviutl2: AviUtl2) -> None:
     assert count_pixels(image, BAR_GREEN) == bar_pixels(2)
 
 
-# ---- 個別オブジェクトの番号 ----
+# ---- 位置と大きさ ----
 
 
-def test_slots_are_numbered_from_top(aviutl2: AviUtl2) -> None:
-    """RM-F18: 個別オブジェクトの番号は、上から何番目の連番スロットか（0 から）。
-
-    画像を指定していないスロットも番号を使う。
-    """
+def test_slot_position_and_scale(aviutl2: AviUtl2) -> None:
+    """RM-F17: 連番スロットの X・Y・拡大率で、そのスロットの画像だけを、ずらした位置に指定の大きさで描く。"""
     effect = base(10, 3)
 
     image = aviutl2.render(
-        project(effect, slot(BAR), slot(), slot(NUMBER, source=2), shift_by_index(200), width=1280), [0]
+        project(
+            effect, slot(BAR, x=-300, y=-150), slot(NUMBER, source=2, x=300, y=50, scale=200), width=1280
+        ),
+        [0],
     ).images[0]
 
-    # 画面の中央は x=640。バー（番号0）はそのまま、数字（番号2）は 400 右の x=1040 にずれる。
-    bar_left, _, bar_right, _ = color_mask(image, BAR_GREEN).getbbox()
-    assert (bar_left + bar_right) // 2 == pytest.approx(640, abs=2)
-    assert_number_at(image, 1040, 3)
+    # バーは X=-300・Y=-150：中心が (640-300, 240-150)。大きさはそのまま。
+    bar_left, bar_top, bar_right, bar_bottom = color_mask(image, BAR_GREEN).getbbox()
+    assert (bar_left + bar_right) // 2 == pytest.approx(340, abs=2)
+    assert (bar_top + bar_bottom) // 2 == pytest.approx(90, abs=2)
+    assert count_pixels(image, BAR_GREEN) == bar_pixels(10)
+
+    # 数字は X=300・Y=50・拡大率 200%：中心が (940, 290)、白い部分の大きさが 2 倍。
+    expected_left, expected_top, expected_right, expected_bottom = color_mask(
+        Image.open(SAMPLES / "number" / "number_003.png"), NUMBER_WHITE
+    ).getbbox()
+    # バーにも白い枠線があるので、バーより右（x >= 700）だけを見る。
+    right_side = image.crop((700, 0, image.width, image.height))
+    number_left, number_top, number_right, number_bottom = color_mask(right_side, NUMBER_WHITE).getbbox()
+    number_left, number_right = number_left + 700, number_right + 700
+    assert number_right - number_left == pytest.approx((expected_right - expected_left) * 2, abs=4)
+    assert number_bottom - number_top == pytest.approx((expected_bottom - expected_top) * 2, abs=4)
+    image_center_x = (expected_left + expected_right) / 2 - NUMBER_WIDTH / 2
+    image_center_y = (expected_top + expected_bottom) / 2 - NUMBER_HEIGHT / 2
+    assert (number_left + number_right) / 2 == pytest.approx(940 + image_center_x * 2, abs=3)
+    assert (number_top + number_bottom) / 2 == pytest.approx(290 + image_center_y * 2, abs=3)
 
 
 # ---- 公開 ----
@@ -276,9 +292,9 @@ def test_works_after_renaming_the_files(aviutl2: AviUtl2, renamed_names: tuple[s
     """利用者がスクリプトのファイル名を変えても、同じように動く。"""
     renamed_base, renamed_slot = renamed_names
     effect = base(5, 3, name=renamed_base)
-    slots = (slot(BAR, name=renamed_slot), slot(NUMBER, source=2, name=renamed_slot))
+    slots = (slot(BAR, name=renamed_slot), slot(NUMBER, source=2, x=400, name=renamed_slot))
 
-    image = aviutl2.render(project(effect, *slots, shift_by_index(400), width=1280), [0]).images[0]
+    image = aviutl2.render(project(effect, *slots, width=1280), [0]).images[0]
 
     assert count_pixels(image, BAR_GREEN) == bar_pixels(5)
     assert_number_at(image, 1040, 3)
@@ -322,17 +338,11 @@ def test_guide_always_shown(aviutl2: AviUtl2, slots: tuple[Effect, ...]) -> None
     aviutl2.assert_snapshot(result)
 
 
-def test_guide_does_not_shift_slot_numbers(aviutl2: AviUtl2) -> None:
-    """案内は最後の個別オブジェクトになり、連番スロットの番号をずらさない。"""
-    # bar は左寄せで伸びるので、中心の位置は満タン（10）のときに確かめる。
+def test_guide_shown_with_slots(aviutl2: AviUtl2) -> None:
+    """不備のあるスロットがあっても、ほかのスロットは描かれ、案内は土台の位置に表示される。"""
     effect = base(10, guide="常に")
 
-    result = aviutl2.render(
-        project(effect, slot(BAR), slot(NOT_SEQUENTIAL), shift_by_index(250), width=1600), [0]
-    )
+    result = aviutl2.render(project(effect, slot(BAR, y=-150), slot(NOT_SEQUENTIAL), width=1280), [0])
 
-    # バー（番号0）は中央 x=800 のまま。案内（番号2）は 500 右にずれる（基準画像で確かめる）。
-    bar_left, _, bar_right, _ = color_mask(result.images[0], BAR_GREEN).getbbox()
-    assert (bar_left + bar_right) // 2 == pytest.approx(800, abs=2)
     assert count_pixels(result.images[0], BAR_GREEN) == bar_pixels(10)
     aviutl2.assert_snapshot(result)
