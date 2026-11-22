@@ -1,0 +1,13 @@
+version: "3"
+
+tasks:
+  check:
+    desc: 静的検査
+    cmds:
+      - uv run ruff format --check
+      - uv run ruff check
+
+  test:
+    desc: AviUtl2 を起動してスクリプトを検証する
+    cmds:
+      - uv run pytest {{.CLI_ARGS}}

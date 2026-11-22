@@ -1,0 +1,20 @@
+# Windows のショートカット（環境固有のパスを含むため公開しない）
+*.lnk
+
+# AviUtl2 のプロジェクトファイルや出力（利用者の素材・パスを含むため公開しない）
+*.aup2
+*.aup2.bak
+*.mp4
+*.avi
+
+# 個人用の作業フォルダ（実素材での確認などに使う）
+local/
+
+# Python / aviutl2-pyrrhulina（検証用の AviUtl2 の複製と、テストごとの証拠ファイル）
+.venv/
+__pycache__/
+.aviutl2-pyrrhulina/
+
+# OS / エディタ
+Thumbs.db
+desktop.ini

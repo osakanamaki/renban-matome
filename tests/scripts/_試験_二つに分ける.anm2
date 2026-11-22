@@ -1,0 +1,3 @@
+--label:開発確認
+--information:テスト専用。オブジェクトを2つの個別オブジェクトに分ける（何も描かない）
+obj.multiobject(2, function() end)

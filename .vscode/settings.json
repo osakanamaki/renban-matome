@@ -1,0 +1,13 @@
+{
+	"files.associations": {
+		"*.anm2": "lua",
+		"*.obj2": "lua",
+		"*.cam2": "lua",
+		"*.scn2": "lua",
+		"*.tra2": "lua"
+	},
+	"[lua]": {
+		"files.encoding": "utf8",
+		"files.eol": "\r\n"
+	}
+}

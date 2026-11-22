@@ -1,0 +1,5 @@
+--label:開発確認
+--information:テスト専用。個別オブジェクトの番号ごとに横へずらす（オブジェクト座標の代わり）
+--track@step:間隔,0,1000,300,1
+print("[ずらす] index=" .. tostring(obj.index) .. " num=" .. tostring(obj.num) .. " step=" .. tostring(step) .. " ox=" .. tostring(obj.ox))
+obj.ox = obj.ox + obj.index * step

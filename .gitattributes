@@ -1,0 +1,10 @@
+# AviUtl2 同梱のスクリプトに合わせ、UTF-8（BOMなし）・CRLF で保存する
+*.anm2 text eol=crlf
+*.obj2 text eol=crlf
+*.cam2 text eol=crlf
+*.scn2 text eol=crlf
+*.tra2 text eol=crlf
+*.lua  text eol=crlf
+*.ps1  text eol=crlf
+
+*.png binary

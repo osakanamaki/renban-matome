@@ -1,0 +1,5 @@
+--label:開発確認
+--information:テスト専用。global の値をログに出し、テキストとして表示する
+--string@name:名前,
+print("[公開値] " .. name .. "=" .. tostring(global[name]))
+obj.load("text", tostring(global[name]))

@@ -1,0 +1,23 @@
+{
+	"$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
+	"runtime.version": "LuaJIT",
+	"runtime.builtin": {
+		"io": "disable",
+		"os": "disable",
+		"debug": "disable",
+		"ffi": "disable",
+		"package": "disable"
+	},
+	"diagnostics.globals": [
+		"obj",
+		"global",
+		"RGB",
+		"HSV",
+		"OR",
+		"AND",
+		"XOR",
+		"SHIFT",
+		"rotation",
+		"debug_print"
+	]
+}

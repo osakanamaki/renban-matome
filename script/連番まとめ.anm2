@@ -1,0 +1,154 @@
+--label:連番まとめ
+--information:連番まとめ v0.1.0
+--require:2011700
+--track@frame_position:フレーム位置,-9999,99999,0,1
+--string@export_name:公開名,
+--group:スロット1,true
+--file@slot1_file:スロット1::画像
+--track@slot1_offset:スロット1::オフセット,-9999,9999,0,1
+--track@slot1_limit:スロット1::上限,0,99999,0,1,制限なし
+--group:スロット2,true
+--file@slot2_file:スロット2::画像
+--track@slot2_offset:スロット2::オフセット,-9999,9999,0,1
+--track@slot2_limit:スロット2::上限,0,99999,0,1,制限なし
+--group:スロット3,false
+--file@slot3_file:スロット3::画像
+--track@slot3_offset:スロット3::オフセット,-9999,9999,0,1
+--track@slot3_limit:スロット3::上限,0,99999,0,1,制限なし
+--group:スロット4,false
+--file@slot4_file:スロット4::画像
+--track@slot4_offset:スロット4::オフセット,-9999,9999,0,1
+--track@slot4_limit:スロット4::上限,0,99999,0,1,制限なし
+--group
+
+-- 連番まとめ
+--
+-- 複数の連番画像（スロット）を、1つの「フレーム位置」で一括して切り替える。
+--
+-- 表示番号 = フレーム位置 + オフセット（0 が先頭画像）
+-- 表示する画像 = 先頭画像のファイル名の末尾の数字に、表示番号を足した番号の画像
+-- 表示番号が負、上限を超える、または画像が無いときは、そのスロットは何も表示しない。
+--
+-- 同じオブジェクトに複数付けたときの動き:
+--   obj.multiobject() を呼ぶ効果を同じオブジェクトに複数付けると、2つ目以降は
+--   1つ目が作った個別オブジェクトの中で実行され、そこで obj.multiobject() を呼ぶと何も描かれなくなる。
+--   そこで、1つ目（代表）が全部の「連番まとめ」の設定を obj.getvalue() で読み、まとめて描く。
+--   2つ目以降は、入口で obj.num > 1 になるので、描画をせずに戻る。
+--
+-- 個別オブジェクトの番号（obj.index）:
+--   (何番目の連番まとめ - 1) × SLOT_COUNT + (スロット番号 - 1)
+--   画像が無いスロットも番号を使う（透明になる）。番号がずれないようにするため。
+
+-- 効果名は、ファイル名から決まる。利用者がファイル名を変えても動くよう、固定の文字列にしない。
+local EFFECT_NAME = obj.getoption("script_name")
+local SLOT_COUNT = 4
+-- 自分より上の効果を何個まで調べるか。範囲外も「スクリプト以外」も空のテキストになり区別できないため、上限を決める。
+local MAX_EFFECTS_ABOVE = 64
+
+-- 先頭画像のパスと表示番号から、表示する画像のパスを作る。表示しないときは nil を返す。
+-- 例: "C:\a\bar_000.png" と 7 → "C:\a\bar_007.png"
+local function build_image_path(first_image_path, display_number)
+	if type(first_image_path) ~= "string" or first_image_path == "" then
+		return nil
+	end
+	if display_number < 0 then
+		return nil
+	end
+
+	local prefix, digits, extension = string.match(first_image_path, "^(.-)(%d+)(%.[^%.\\/]+)$")
+	if digits == nil then
+		return nil
+	end
+
+	local image_number = tonumber(digits) + display_number
+	local number_text = string.format("%0" .. string.len(digits) .. "d", image_number)
+	return prefix .. number_text .. extension
+end
+
+local function to_integer(value)
+	local number = tonumber(value)
+	if number == nil then
+		return 0
+	end
+	return math.floor(number)
+end
+
+-- 1つの「連番まとめ」のスロットについて、表示する画像のパスを返す（表示しないときは nil）。
+local function slot_image_path(effect_key, frame, slot_number)
+	local item_prefix = "スロット" .. slot_number .. "::"
+	local first_image_path = obj.getvalue(effect_key, item_prefix .. "画像")
+	local offset = to_integer(obj.getvalue(effect_key, item_prefix .. "オフセット"))
+	local limit = to_integer(obj.getvalue(effect_key, item_prefix .. "上限"))
+
+	local display_number = frame + offset
+	local has_limit = limit > 0
+	if has_limit and display_number > limit then
+		return nil
+	end
+	return build_image_path(first_image_path, display_number)
+end
+
+-- 同じオブジェクトに付いた全部の「連番まとめ」の、全スロットの画像のパスを集める。
+-- 戻り値: パスの表（画像が無い番号は nil）、個別オブジェクトの数
+local function collect_image_paths()
+	local image_paths = {}
+	local object_count = 0
+	local instance_number = 0
+	while true do
+		local effect_key = EFFECT_NAME .. ":" .. instance_number
+		local frame = obj.getvalue(effect_key, "フレーム位置")
+		if frame == nil then
+			break
+		end
+		for slot_number = 1, SLOT_COUNT do
+			object_count = object_count + 1
+			image_paths[object_count] = slot_image_path(effect_key, to_integer(frame), slot_number)
+		end
+		instance_number = instance_number + 1
+	end
+	return image_paths, object_count
+end
+
+-- フレーム位置を、利用者が付けた名前で公開する（テキストなどから global.名前 で参照できる）。
+if type(export_name) == "string" and export_name ~= "" then
+	global[export_name] = to_integer(frame_position)
+end
+
+-- 自分より上に、有効な同じ効果があるか。
+local function has_same_effect_above()
+	for position = -1, -MAX_EFFECTS_ABOVE, -1 do
+		if obj.getoption("script_name", position, true) == EFFECT_NAME then
+			return true
+		end
+	end
+	return false
+end
+
+if obj.num > 1 then
+	-- 2つ目以降の「連番まとめ」。描画は代表が済ませている。
+	-- 上に同じ効果が無いなら、もともと個別オブジェクトに分かれたオブジェクトに付けられている。
+	-- その場合は描けないので、気づけるようにログへ書く（個別オブジェクトごとに書かないよう、最初の1つだけ）。
+	if obj.index == 0 and not has_same_effect_above() then
+		print("[" .. EFFECT_NAME .. "] 個別オブジェクトに分かれたオブジェクトには付けられません。何も表示しません。")
+	end
+	return
+end
+
+local image_paths, object_count = collect_image_paths()
+if object_count == 0 then
+	-- 自分自身の設定が読めないのは想定外。黙って消えないよう、ログへ書く。
+	print("[" .. tostring(EFFECT_NAME) .. "] 設定を読み取れませんでした。何も表示しません。")
+	obj.alpha = 0
+	return
+end
+
+obj.multiobject(object_count, function()
+	local image_path = image_paths[obj.index + 1]
+	local loaded = false
+	if image_path ~= nil then
+		loaded = obj.load("image", image_path)
+	end
+	if not loaded then
+		obj.alpha = 0
+	end
+end)
