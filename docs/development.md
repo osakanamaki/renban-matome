@@ -1,14 +1,13 @@
 # 開発環境
 
-AviUtl2 のスクリプトはビルド不要です。テキストファイル（Lua）を所定のフォルダに置けば、AviUtl2 が読み込みます。
-そのため、開発環境は「リポジトリのファイルを、AviUtl2 から直接見えるようにする」だけで整います。
+AviUtl2 のスクリプトはビルド不要です。所定のフォルダに置けば、AviUtl2 に読み込まれます。
 
 ## フォルダ構成
 
 | パス | 内容 |
-|---|---|
+| --- | --- |
 | `script/` | 公開するスクリプト本体。AviUtl2 の Script フォルダにリンクする |
-| `samples/` | 動作確認用のダミー連番画像（自作。`tools/make-dummy-images.ps1` で生成） |
+| `samples/` | 動作確認用のダミー連番画像（リポジトリに同梱。[サンプル画像](#サンプル画像) を参照） |
 | `tools/` | 開発用の補助スクリプト |
 | `docs/` | 開発者向けの資料 |
 | `local/` | 個人用の作業フォルダ（Git 管理外。実素材やプロジェクトファイルはここへ） |
@@ -25,11 +24,32 @@ AviUtl2 のスクリプトはビルド不要です。テキストファイル（
    `C:\ProgramData\aviutl2\Script\renban-matome-dev` が、このリポジトリの `script/` を指すようになります。
    解除するときは `pwsh tools/unlink-dev.ps1` を実行します（リポジトリのファイルは消えません）。
 
-3. ダミー画像を作る（作成済みなら不要）。
+## サンプル画像
 
-   ```powershell
-   pwsh tools/make-dummy-images.ps1
-   ```
+`samples/` の画像は、`tools/` のスクリプトで描いた画像です。
+リポジトリに同梱しているので、普段はスクリプトを実行する必要はありません。
+
+| フォルダ | 内容 | 生成スクリプト |
+| --- | --- | --- |
+| `samples/number/` | 数字 0～10（11 枚） | `tools/make-dummy-images.ps1` |
+| `samples/bar/` | 0～10 割合のバー（11 枚） | `tools/make-dummy-images.ps1` |
+| `samples/animation/` | 猫の AA が魚のばねの玩具を猫パンチする。30fps・5 秒（150 枚）、ループ可 | `tools/make-animation-images.py` |
+
+絵を変えたいときだけ、スクリプトを編集して次のように作り直します。
+
+```powershell
+pwsh tools/make-dummy-images.ps1
+```
+
+```powershell
+uv run --with pyoxipng python tools/make-animation-images.py
+```
+
+:::note
+`make-animation-images.py` は zopfli 圧縮のため、数分かかります。  
+生成結果は Pillow・フォント（MS Pゴシック）・oxipng のバージョンで変わることがあります。作り直すと全ファイルが差し替わり履歴に残るので、絵を変えるとき以外は実行しないでください。  
+自動テストは `bar`・`number` を入力に使います。これらを作り直したら、テストが通ることを確かめてください。  
+:::
 
 ## 動作確認の流れ
 
@@ -52,7 +72,7 @@ AviUtl2 のスクリプトはビルド不要です。テキストファイル（
 `obj.getinfo("version")` が返す番号は、ウィンドウに表示されるバージョンと形式が違います。
 
 | 画面の表示 | バージョン番号 | 確認方法 |
-|---|---|---|
+| --- | --- | --- |
 | 2.1.17 | `2011700` | 「_開発確認」で実測（2026-11-07） |
 | 2.00 beta35 | `2003500` | lua.txt の `--require` の例 |
 
@@ -61,7 +81,7 @@ AviUtl2 のスクリプトはビルド不要です。テキストファイル（
 ## 「スクリプトの種類」と追加のしかた
 
 | 拡張子 | 種類 | 追加のしかた |
-|---|---|---|
+| --- | --- | --- |
 | `.obj2` | カスタムオブジェクト | タイムラインの「オブジェクト追加」から、単独のオブジェクトとして置く |
 | `.anm2` | アニメーション効果（フィルタ効果） | オブジェクト設定ウィンドウの [+] から、既存のオブジェクトに付ける。1つのオブジェクトに複数付けられる |
 
@@ -82,7 +102,7 @@ AviUtl2 のスクリプトはビルド不要です。テキストファイル（
 [aviutl2-pyrrhulina](https://github.com/osakanamaki/aviutl2-pyrrhulina) で、AviUtl2 を実際に起動して描画結果を確かめる。
 Releases の wheel を `pyproject.toml` で参照している。
 
-```
+```sh
 uv sync
 uv run task test
 ```
