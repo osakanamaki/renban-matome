@@ -45,11 +45,9 @@ pwsh tools/make-dummy-images.ps1
 uv run --with pyoxipng python tools/make-animation-images.py
 ```
 
-:::note
-`make-animation-images.py` は zopfli 圧縮のため、数分かかります。  
-生成結果は Pillow・フォント（MS Pゴシック）・oxipng のバージョンで変わることがあります。作り直すと全ファイルが差し替わり履歴に残るので、絵を変えるとき以外は実行しないでください。  
-自動テストは `bar`・`number` を入力に使います。これらを作り直したら、テストが通ることを確かめてください。  
-:::
+- `make-animation-images.py` は zopfli 圧縮のため、数分かかります。  
+- 生成結果は Pillow・フォント（MS Pゴシック）・oxipng のバージョンで変わることがあります。作り直すと全ファイルが差し替わり履歴に残るので、絵を変えるとき以外は実行しないでください。  
+- 自動テストは `bar`・`number` を入力に使います。これらを作り直したら、テストが通ることを確かめてください。  
 
 ## 動作確認の流れ
 
