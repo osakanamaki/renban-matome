@@ -18,6 +18,8 @@ NUMBER_SLOT = "テキスト数値スロット"
 REPEAT_SLOT = "連番スロット（複製並べ）"
 # 土台が対応していない種類のスロット（案内の確認用）。
 UNKNOWN_SLOT = "_試験_未知のスロット"
+# 土台が使う kernel32 の関数を、違う型で先に ffi で宣言するカスタムオブジェクト（何も描かない）。
+DECLARE_FFI = "_試験_ffiの宣言"
 
 SAMPLES = Path(__file__).parent.parent / "samples"
 BAR = SAMPLES / "bar" / "bar_000.png"
@@ -270,6 +272,62 @@ def test_clamp(aviutl2: AviUtl2, value: int, count: int, expected: int) -> None:
     assert count_pixels(image, BAR_GREEN) == bar_pixels(expected)
 
 
+@pytest.mark.parametrize("outside", ["ループ", "端で止める"], ids=["loop", "clamp"])
+def test_given_count_beyond_files(aviutl2: AviUtl2, outside: str) -> None:
+    """枚数を実際（11 枚）より多く指定し、無い番号の画像になったときは、何も表示しない（仕様）。
+
+    存在しない画像を読み込まないので、ログにエラーも出ない。
+    """
+    # 枚数 20 で値 19 は、ループでも端で止めるでも 19 番（bar_019.png、存在しない）になる。
+    slots = (slot(BAR, outside=outside, count=20), slot(NUMBER, outside=outside, count=20))
+
+    # ログにエラーがあれば、render() が失敗する（allow_log_errors を渡していない）。
+    result = aviutl2.render(project(base(19), *slots), [0])
+
+    assert result.images[0].getbbox() is None
+
+
+def make_sequence(folder: Path, image_count: int) -> Path:
+    """bar_000〜 を複製して、image_count 枚の連番 seq_000〜 を作る。選ぶ画像（seq_000.png）を返す。"""
+    folder.mkdir()
+    for number in range(image_count):
+        shutil.copyfile(SAMPLES / "bar" / f"bar_{number:03d}.png", folder / f"seq_{number:03d}.png")
+    return folder / "seq_000.png"
+
+
+@pytest.mark.parametrize("image_count", [1, 2, 3, 4, 5, 8, 9, 11])
+def test_auto_count_boundary(aviutl2: AviUtl2, tmp_path: Path, image_count: int) -> None:
+    """RM-F15: 枚数を自動で数える処理（倍々に調べてから二分探索）が、2 の累乗の前後でも正しく数える。
+
+    端で止めるで大きな値を指定すると、最後の画像（image_count - 1 番）が表示される。
+    """
+    first_image = make_sequence(tmp_path / "seq", image_count)
+
+    image = aviutl2.render(project(base(50), slot(first_image, outside="端で止める")), [0]).images[0]
+
+    assert image.getbbox() is not None
+    assert count_pixels(image, BAR_GREEN) == bar_pixels(image_count - 1)
+
+
+def test_auto_count_reused_across_frames(aviutl2: AviUtl2, tmp_path: Path) -> None:
+    """数えた枚数を使い回しても、別の連番の枚数と混ざらず、フレームが進んでも正しい。"""
+    five = make_sequence(tmp_path / "five", 5)
+    nine = make_sequence(tmp_path / "nine", 9)
+    # 値1 は 0 → 9。5 枚の連番はループで 9 → 4、9 枚の連番は端で止めるで 9 → 8。
+    effect = base("0.00,9.00,直線移動,0")
+    # バー（高さ 40）は、5 枚の連番を中央 y=240、9 枚の連番を Y で 100 下の y=340 に置く。
+    slots = (slot(five, outside="ループ"), slot(nine, outside="端で止める", y=100))
+
+    result = aviutl2.render(project(effect, *slots, end=9), [0, 6, 9])
+
+    # 2つのバーを、画面の上下に分けて数える。
+    for frame, expected_five, expected_nine in ((0, 0, 0), (6, 1, 6), (9, 4, 8)):
+        upper = result.images[frame].crop((0, 0, 640, 290))
+        lower = result.images[frame].crop((0, 290, 640, 480))
+        assert count_pixels(upper, BAR_GREEN) == bar_pixels(expected_five), f"frame {frame}"
+        assert count_pixels(lower, BAR_GREEN) == bar_pixels(expected_nine), f"frame {frame}"
+
+
 def test_auto_count_from_selected_image(aviutl2: AviUtl2) -> None:
     """RM-F15: 枚数は、選んだ画像から数える（bar_004 から数えると 7 枚）。"""
     image = aviutl2.render(
@@ -406,6 +464,28 @@ def test_number_rejected_formula(aviutl2: AviUtl2) -> None:
 
     assert hidden.images[0].getbbox() is None
     assert guided.images[0].getbbox() is not None
+
+
+@pytest.mark.parametrize(
+    ("value", "formula", "expected_text"),
+    [
+        (0, "{値1 * -1}", "0"),
+        (1, "{値1 * 2^53}", "9007199254740992"),
+        (1, "{値1 * 1e20}", "1e+20"),
+        (1, "{値1 / 4}", "0.25"),
+    ],
+    ids=["minus_zero", "exact_limit", "huge", "fraction"],
+)
+def test_number_format(aviutl2: AviUtl2, value: int, formula: str, expected_text: str) -> None:
+    """計算結果は、整数なら全桁で、全桁を正確に表せない大きな数や小数なら Lua の書き方で表示される。
+
+    計算式を書いたテキストと、期待する文字をそのまま書いたテキストの描画を比べる。
+    """
+    actual = aviutl2.render(project(base(value), number_slot(formula)), [0]).images[0]
+    expected = aviutl2.render(project(base(value), number_slot(expected_text)), [0]).images[0]
+
+    assert actual.getbbox() is not None
+    assert ImageChops.difference(actual, expected).getbbox() is None
 
 
 # ---- 連番スロット（複製並べ） ----
@@ -559,6 +639,20 @@ def test_japanese_path(aviutl2: AviUtl2, japanese_bar: Path) -> None:
 
     assert count_pixels(image_shown, BAR_GREEN) == bar_pixels(3)
     assert count_pixels(image_loop, BAR_GREEN) == bar_pixels(3)
+
+
+def test_other_ffi_declarations(aviutl2: AviUtl2, japanese_bar: Path) -> None:
+    """ほかのスクリプトが、ファイルの確かめに使う関数を違う型で先に宣言していても、土台は動く。
+
+    ffi の宣言はスクリプト同士で共有され、同じ名前の宣言は先のものが使われ続ける。
+    """
+    # 描画は上のレイヤーから行われるので、宣言するスクリプトを土台より上（レイヤー 0）に置く。
+    declarer = TimelineObject(0, 0, 9, [Effect(DECLARE_FFI), Effect("標準描画")])
+    host = TimelineObject(1, 0, 9, [base(14), slot(japanese_bar, outside="ループ"), Effect("標準描画")])
+
+    image = aviutl2.render(Project(640, 480, [declarer, host]), [0]).images[0]
+
+    assert count_pixels(image, BAR_GREEN) == bar_pixels(3)
 
 
 # ---- 案内 ----

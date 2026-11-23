@@ -140,33 +140,59 @@ local function build_image_path(image_path, display_number)
 	return prefix .. number_text .. extension
 end
 
+-- 描くたびに作り直さず、使い回すもの（kernel32 の読み込みと、数えた枚数）を置く表。
+-- AviUtl2 の Lua の状態は、スクリプトの実行（フレーム）をまたいで残り、ほかのスクリプトとも共有される。
+-- そこで、package.loaded の中の、このスクリプト専用の名前の場所に置く（グローバル変数は増やさない）。
+local SHARED_STATE_KEY = "renban-matome（値）"
+local shared_state = package.loaded[SHARED_STATE_KEY]
+if shared_state == nil then
+	shared_state = {
+		-- ffi.load("kernel32") の結果（初めて使うときに読み込む）。
+		kernel32 = nil,
+		-- 選んだ画像のパス → 数えた枚数。
+		image_counts = {},
+	}
+	package.loaded[SHARED_STATE_KEY] = shared_state
+end
+
+local ffi = require("ffi")
+
+-- kernel32 の関数を使えるようにして返す。宣言と読み込みは、Lua の状態ごとに一度だけ行う。
+-- ffi.cdef は、同じ名前の関数が既に宣言されているとき、エラーにせず先の宣言を使い続ける。
+-- ほかのスクリプトが同じ関数を違う型で宣言していても影響を受けないよう、__asm__ で本当の名前を指し、
+-- このスクリプト専用の名前で宣言する。
+local function load_kernel32()
+	if shared_state.kernel32 == nil then
+		ffi.cdef([[
+			int renban_matome_MultiByteToWideChar(unsigned int code_page, unsigned long flags, const char *source, int source_length, wchar_t *destination, int destination_length) __asm__("MultiByteToWideChar");
+			unsigned long renban_matome_GetFileAttributesW(const wchar_t *file_name) __asm__("GetFileAttributesW");
+		]])
+		-- AviUtl2 の中では ffi.C から kernel32 の関数を引けないため、明示して読み込む。
+		shared_state.kernel32 = ffi.load("kernel32")
+	end
+	return shared_state.kernel32
+end
+
 -- ファイルがあるかを確かめる。obj.load() と違い、無くても AviUtl2 のログにエラーが出ない。
 -- AviUtl2 から受け取るパスは UTF-8。io.open() は Windows ではパスを UTF-8 として読まないため、
 -- 日本語を含むパスを開けない。そこで UTF-16 に変換して、Windows の GetFileAttributesW() で確かめる。
 local function file_exists(path)
-	local ffi = require("ffi")
-	-- スクリプトは描くたびに実行されるので、2回目以降の宣言は「定義済み」のエラーになる。pcall で無視する。
-	pcall(ffi.cdef, [[
-		int MultiByteToWideChar(unsigned int code_page, unsigned long flags, const char *source, int source_length, wchar_t *destination, int destination_length);
-		unsigned long GetFileAttributesW(const wchar_t *file_name);
-	]])
-	-- AviUtl2 の中では ffi.C から kernel32 の関数を引けないため、明示して読み込む。
-	local kernel32 = ffi.load("kernel32")
+	local kernel32 = load_kernel32()
 	local CP_UTF8 = 65001
 	local INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
 	local FILE_ATTRIBUTE_DIRECTORY = 0x10
 
 	-- 終わりの 0 を含めた長さ（-1 を渡すと、終わりの 0 まで変換する）。
-	local wide_length = kernel32.MultiByteToWideChar(CP_UTF8, 0, path, -1, nil, 0)
+	local wide_length = kernel32.renban_matome_MultiByteToWideChar(CP_UTF8, 0, path, -1, nil, 0)
 	if wide_length <= 0 then
 		return false
 	end
 	local wide_path = ffi.new("wchar_t[?]", wide_length)
-	if kernel32.MultiByteToWideChar(CP_UTF8, 0, path, -1, wide_path, wide_length) <= 0 then
+	if kernel32.renban_matome_MultiByteToWideChar(CP_UTF8, 0, path, -1, wide_path, wide_length) <= 0 then
 		return false
 	end
 
-	local attributes = kernel32.GetFileAttributesW(wide_path)
+	local attributes = kernel32.renban_matome_GetFileAttributesW(wide_path)
 	if attributes == INVALID_FILE_ATTRIBUTES then
 		return false
 	end
@@ -205,6 +231,26 @@ local function count_images(image_path)
 		end
 	end
 	return last_found + 1
+end
+
+-- 前に数えた枚数が、今も正しいかを確かめる（最後の画像があり、その次の画像が無いか）。
+-- 数え直すより少ない回数（2回）で済む。番号の抜けは無いものとする（count_images と同じ）。
+local function is_image_count_current(image_path, image_count)
+	local last_exists = image_count == 0 or file_exists(build_image_path(image_path, image_count - 1))
+	local next_missing = image_count >= MAX_IMAGE_COUNT or not file_exists(build_image_path(image_path, image_count))
+	return last_exists and next_missing
+end
+
+-- 選んだ画像からの枚数を返す。描くたびに数え直さないよう、数えた枚数を使い回す。
+-- 画像を足したり消したりして、前の枚数が合わなくなったときは数え直す。
+local function image_count_of(image_path)
+	local image_count = shared_state.image_counts[image_path]
+	if image_count ~= nil and is_image_count_current(image_path, image_count) then
+		return image_count
+	end
+	image_count = count_images(image_path)
+	shared_state.image_counts[image_path] = image_count
+	return image_count
 end
 
 -- パスからファイル名だけを取り出す（案内の表示用）。
@@ -330,7 +376,7 @@ local function resolve_image_path(effect_key, display_number, out_of_range, imag
 			end
 			return nil, nil
 		end
-		image_count = count_images(image_path)
+		image_count = image_count_of(image_path)
 	end
 	local number = apply_out_of_range(display_number, image_count, out_of_range)
 	if number == nil then
@@ -554,11 +600,20 @@ local function to_color(value, default_color)
 	return color
 end
 
+-- 全桁を正確に表せる整数の上限（Lua の数は倍精度の浮動小数点数で、仮数は 53 bit）。
+local EXACT_INTEGER_LIMIT = 2 ^ 53
+
 -- 計算結果を、表示する文字にする。整数なら小数点を付けない。
 local function format_number(number)
-	if number == math.floor(number) then
-		return string.format("%d", number)
+	if number == 0 then
+		-- -0 を "-0" と書かないように、0 として書く。
+		return "0"
 	end
+	if number == math.floor(number) and math.abs(number) <= EXACT_INTEGER_LIMIT then
+		-- %d は 64bit 整数に収まらない数を正しく書けないため、小数点以下 0 桁の %.0f で書く。
+		return string.format("%.0f", number)
+	end
+	-- 小数と、全桁を正確に表せない大きな整数は、Lua の書き方（有効数字 14 桁、必要なら指数の形）にする。
 	return tostring(number)
 end
 
