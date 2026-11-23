@@ -14,6 +14,7 @@ BASE = "連番まとめ（値）"
 SLOT = "連番スロット"
 FORMULA_SLOT = "計算式スロット"
 NUMBER_SLOT = "数値スロット"
+REPEAT_SLOT = "並べスロット"
 # 土台が対応していない種類のスロット（案内の確認用）。
 UNKNOWN_SLOT = "_試験_未知のスロット"
 
@@ -92,6 +93,29 @@ def number_slot(
         "X": f"{x:.1f}",
     }
     return Effect(NUMBER_SLOT, params)
+
+
+def repeat_slot(
+    image: Path | str,
+    *,
+    image_value: int = 1,
+    count_value: int = 2,
+    wrap: int = 0,
+    margin: float = 0,
+    align: str = "左揃え",
+    scale: float = 100,
+) -> Effect:
+    """並べスロット。wrap は折り返しの数（0 は折り返さない）、margin は余白。"""
+    params: dict[str, object] = {
+        "画像": image,
+        "画像を選ぶ値": f"値{image_value}",
+        "数を決める値": f"値{count_value}",
+        "折り返しの数": str(wrap),
+        "余白": f"{margin:.1f}",
+        "並べ方": align,
+        "拡大率": f"{scale:.2f}",
+    }
+    return Effect(REPEAT_SLOT, params)
 
 
 def project(
@@ -381,6 +405,84 @@ def test_number_rejected_formula(aviutl2: AviUtl2) -> None:
 
     assert hidden.images[0].getbbox() is None
     assert guided.images[0].getbbox() is not None
+
+
+# ---- 並べスロット ----
+
+
+def number_white_box(number: int) -> tuple[int, int, int, int]:
+    """number_00n の画像の中の、白い部分の範囲（左, 上, 右, 下）。"""
+    return color_mask(Image.open(SAMPLES / "number" / f"number_{number:03d}.png"), NUMBER_WHITE).getbbox()
+
+
+def test_repeat_count_follows_value(aviutl2: AviUtl2) -> None:
+    """RM-F50: 2つ目の値の数だけ、1つ目の値で選んだ画像が並ぶ。"""
+    image = aviutl2.render(project(base(3, 4), repeat_slot(NUMBER), width=1280), [0]).images[0]
+
+    single = count_pixels(Image.open(SAMPLES / "number" / "number_003.png"), NUMBER_WHITE)
+    assert count_pixels(image, NUMBER_WHITE) == single * 4
+
+
+@pytest.mark.parametrize(
+    ("align", "margin"),
+    [("左揃え", 0), ("左揃え", 10), ("中央揃え", 10), ("右揃え", 10)],
+    ids=["left", "left_margin", "center", "right"],
+)
+def test_repeat_alignment(aviutl2: AviUtl2, align: str, margin: float) -> None:
+    """RM-F52: 並べ方と余白で、並びの位置が決まる。並びの上端は土台の位置。"""
+    image = aviutl2.render(
+        project(base(3, 3), repeat_slot(NUMBER, margin=margin, align=align), width=1280), [0]
+    ).images[0]
+
+    white_left, white_top, white_right, _ = number_white_box(3)
+    cell_width = NUMBER_WIDTH + margin * 2
+    row_width = cell_width * 3
+    if align == "左揃え":
+        row_left = 640
+    elif align == "右揃え":
+        row_left = 640 - row_width
+    else:
+        row_left = 640 - row_width / 2
+    left, top, right, _ = color_mask(image, NUMBER_WHITE).getbbox()
+    assert left == pytest.approx(row_left + margin + white_left, abs=1)
+    assert right == pytest.approx(row_left + cell_width * 2 + margin + white_right, abs=1)
+    assert top == pytest.approx(240 + margin + white_top, abs=1)
+
+
+def test_repeat_wraps(aviutl2: AviUtl2) -> None:
+    """RM-F52: 折り返しの数ごとに、次の行に並ぶ。"""
+    image = aviutl2.render(project(base(3, 3), repeat_slot(NUMBER, wrap=2), width=1280), [0]).images[0]
+
+    white_left, white_top, white_right, white_bottom = number_white_box(3)
+    left, top, right, bottom = color_mask(image, NUMBER_WHITE).getbbox()
+    # 2 列・2 行（2 行目は 1 つ）。3 行目は画面の下にはみ出すため、2 行で確かめる。
+    assert right - left == pytest.approx(NUMBER_WIDTH + white_right - white_left, abs=1)
+    assert bottom - top == pytest.approx(NUMBER_HEIGHT + white_bottom - white_top, abs=1)
+
+
+@pytest.mark.parametrize("count", [0, -1], ids=["zero", "negative"])
+def test_repeat_nothing_below_one(aviutl2: AviUtl2, count: int) -> None:
+    """RM-F51: 並べる数が 0 以下なら、何も表示しない。"""
+    image = aviutl2.render(project(base(3, count), repeat_slot(NUMBER)), [0]).images[0]
+
+    assert image.getbbox() is None
+
+
+def test_repeat_limit(aviutl2: AviUtl2) -> None:
+    """RM-F51: 並べる数は 100 まで。150 を指定しても 100 個と同じになる。"""
+
+    def render_count(count: int) -> Image.Image:
+        effect = base(3, count)
+        return aviutl2.render(project(effect, repeat_slot(NUMBER, wrap=20, scale=5), width=1280), [0]).images[
+            0
+        ]
+
+    at_limit = render_count(100)
+    over_limit = render_count(150)
+    under_limit = render_count(99)
+
+    assert ImageChops.difference(at_limit, over_limit).getbbox() is None
+    assert ImageChops.difference(at_limit, under_limit).getbbox() is not None
 
 
 # ---- 位置と大きさ ----

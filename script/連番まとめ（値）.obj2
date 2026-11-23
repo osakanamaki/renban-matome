@@ -39,6 +39,10 @@
 -- 数値スロット:
 --   テキストの中の {計算式} を計算結果に置き換えて、文字として描く（例: "HP {値1}"）。
 --
+-- 並べスロット:
+--   画像を選ぶ値で画像を決め（連番スロットと同じ規則。範囲外は表示しない）、数を決める値の数だけ並べる。
+--   並べる位置は、画像の大きさが分かる、読み込んだ後に決める。
+--
 -- 描き方:
 --   表示物1つを1つの個別オブジェクトとして描き、スロットの X・Y・拡大率を反映する。
 --   案内を表示するときは、案内を最後の個別オブジェクトとして、土台の位置に描く。
@@ -51,6 +55,13 @@ local SLOT_KIND_ITEM = "スロットの種類"
 local SLOT_KIND_SEQUENCE = "連番"
 local SLOT_KIND_FORMULA = "計算式"
 local SLOT_KIND_NUMBER = "数値"
+local SLOT_KIND_REPEAT = "並べ"
+-- 並べスロットで並べる数の上限（多すぎると重くなるため）。
+local MAX_REPEAT_COUNT = 100
+
+local ALIGN_LEFT = "左揃え"
+local ALIGN_CENTER = "中央揃え"
+local ALIGN_RIGHT = "右揃え"
 -- 枚数を数えるときに調べる番号の上限（これより多い連番は、ここまでとみなす）。
 local MAX_IMAGE_COUNT = 100000
 
@@ -243,8 +254,9 @@ local function has_image(effect_key)
 end
 
 -- 画像を使うスロットの、表示する画像のパスを決める。
+-- out_of_range は範囲外の扱い、image_count は枚数（0 以下なら自動で数える）。
 -- 戻り値: 画像のパス（表示しないときは nil）、案内の文（不備が無いときは nil）
-local function resolve_image_path(effect_key, display_number)
+local function resolve_image_path(effect_key, display_number, out_of_range, image_count)
 	local image_path = obj.getvalue(effect_key, "画像")
 	if split_image_path(image_path) == nil then
 		return nil, "連番として扱えないファイル名です：" .. file_name_of(image_path) .. "\n（拡張子の直前に番号が必要です）"
@@ -252,8 +264,6 @@ local function resolve_image_path(effect_key, display_number)
 	if not file_exists(image_path) then
 		return nil, "選んだ画像が見つかりません：" .. file_name_of(image_path)
 	end
-	local out_of_range = tostring(obj.getvalue(effect_key, "範囲外の扱い"))
-	local image_count = to_integer(obj.getvalue(effect_key, "枚数"))
 	if image_count <= 0 then
 		-- 枚数の指定が無い。
 		if out_of_range == OUT_OF_RANGE_HIDE then
@@ -361,7 +371,12 @@ local function resolve_sequence_slot(effect_key, values)
 	if value_number == nil then
 		return {}, "この土台には「" .. tostring(source_name) .. "」がありません。"
 	end
-	local path, guide_line = resolve_image_path(effect_key, values[value_number])
+	local path, guide_line = resolve_image_path(
+		effect_key,
+		values[value_number],
+		tostring(obj.getvalue(effect_key, "範囲外の扱い")),
+		to_integer(obj.getvalue(effect_key, "枚数"))
+	)
 	if path == nil then
 		return {}, guide_line
 	end
@@ -379,12 +394,93 @@ local function resolve_formula_slot(effect_key, values)
 	if result == nil then
 		return {}, guide_line
 	end
-	local path, image_guide_line = resolve_image_path(effect_key, math.floor(result))
+	local path, image_guide_line = resolve_image_path(
+		effect_key,
+		math.floor(result),
+		tostring(obj.getvalue(effect_key, "範囲外の扱い")),
+		to_integer(obj.getvalue(effect_key, "枚数"))
+	)
 	if path == nil then
 		return {}, image_guide_line
 	end
 	local placement = read_slot_placement(effect_key)
 	return { { kind = "image", path = path, x = placement.x, y = placement.y, scale = placement.scale } }, nil
+end
+
+-- 並べスロット1つを読み、描くものを決める。並べる数だけ、同じ画像を描くものにする。
+-- 並べる位置は画像の大きさで決まるので、描くときに layout の情報から計算する。
+-- 戻り値: 描くものの配列、案内の文（不備が無いときは nil）
+local function resolve_repeat_slot(effect_key, values)
+	if not has_image(effect_key) then
+		return {}, nil
+	end
+	local image_value_name = obj.getvalue(effect_key, "画像を選ぶ値")
+	local count_value_name = obj.getvalue(effect_key, "数を決める値")
+	local image_value_number = value_number_of(image_value_name)
+	local count_value_number = value_number_of(count_value_name)
+	if image_value_number == nil then
+		return {}, "この土台には「" .. tostring(image_value_name) .. "」がありません。"
+	end
+	if count_value_number == nil then
+		return {}, "この土台には「" .. tostring(count_value_name) .. "」がありません。"
+	end
+	local repeat_count = math.min(values[count_value_number], MAX_REPEAT_COUNT)
+	if repeat_count <= 0 then
+		return {}, nil
+	end
+	local path, guide_line = resolve_image_path(effect_key, values[image_value_number], OUT_OF_RANGE_HIDE, 0)
+	if path == nil then
+		return {}, guide_line
+	end
+	local placement = read_slot_placement(effect_key)
+	local wrap_count = to_integer(obj.getvalue(effect_key, "折り返しの数"))
+	if wrap_count <= 0 then
+		wrap_count = repeat_count
+	end
+	local layout = {
+		total = repeat_count,
+		per_row = wrap_count,
+		margin = tonumber(obj.getvalue(effect_key, "余白")) or 0,
+		align = tostring(obj.getvalue(effect_key, "並べ方")),
+	}
+	local items = {}
+	for repeat_index = 0, repeat_count - 1 do
+		items[#items + 1] = {
+			kind = "image",
+			path = path,
+			x = placement.x,
+			y = placement.y,
+			scale = placement.scale,
+			layout = layout,
+			repeat_index = repeat_index,
+		}
+	end
+	return items, nil
+end
+
+-- 並べる画像1つの、並びの基準（土台の位置）からの中心の位置を返す。
+-- width・height は画像の大きさ。
+local function repeat_offset(layout, repeat_index, width, height)
+	local cell_width = width + layout.margin * 2
+	local cell_height = height + layout.margin * 2
+	local row = math.floor(repeat_index / layout.per_row)
+	local column = repeat_index % layout.per_row
+	-- この行に並ぶ数（最後の行は少ないことがある）。
+	local row_length = math.min(layout.per_row, layout.total - row * layout.per_row)
+	local center_x
+	if layout.align == ALIGN_RIGHT then
+		-- 行の右端を基準に合わせる。
+		center_x = (column - row_length) * cell_width + cell_width / 2
+	elseif layout.align == ALIGN_CENTER then
+		-- 行の中央を基準に合わせる。
+		center_x = (column - (row_length - 1) / 2) * cell_width
+	else
+		-- 左揃え。行の左端を基準に合わせる。
+		center_x = column * cell_width + cell_width / 2
+	end
+	-- 並びの上端を基準に合わせる。
+	local center_y = row * cell_height + cell_height / 2
+	return center_x, center_y
 end
 
 -- チェックボックスの値は、読み方によって 0/1、"0"/"1"、true/false のどれかで返る。
@@ -517,6 +613,12 @@ for slot_index = 1, #slot_effects do
 		items, guide_line = resolve_formula_slot(slot_effect.effect_key, values)
 	elseif slot_effect.kind == SLOT_KIND_NUMBER then
 		items, guide_line = resolve_number_slot(slot_effect.effect_key, values)
+	elseif slot_effect.kind == SLOT_KIND_REPEAT then
+		image_slot_count = image_slot_count + 1
+		if has_image(slot_effect.effect_key) then
+			has_any_image = true
+		end
+		items, guide_line = resolve_repeat_slot(slot_effect.effect_key, values)
 	else
 		guide_line = "この土台は「" .. slot_effect.kind .. "」のスロットに対応していません。"
 	end
@@ -573,7 +675,15 @@ obj.multiobject(object_count, function()
 		end
 	end
 	-- 位置と大きさは、読み込んだ後に設定する（obj.load() で元に戻るため）。
-	obj.ox = obj.ox + item.x
-	obj.oy = obj.oy + item.y
+	local offset_x = 0
+	local offset_y = 0
+	if item.layout ~= nil then
+		-- 並べスロット。並びの中の位置を、拡大率に合わせて広げる。
+		local center_x, center_y = repeat_offset(item.layout, item.repeat_index, obj.w, obj.h)
+		offset_x = center_x * item.scale
+		offset_y = center_y * item.scale
+	end
+	obj.ox = obj.ox + item.x + offset_x
+	obj.oy = obj.oy + item.y + offset_y
 	obj.zoom = obj.zoom * item.scale
 end)
