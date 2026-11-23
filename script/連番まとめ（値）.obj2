@@ -180,15 +180,21 @@ local function count_images(image_path)
 	if not file_exists(build_image_path(image_path, 0)) then
 		return 0
 	end
-	-- last_found: 存在を確かめた最後の表示番号。first_missing: 存在しないと確かめた最初の表示番号。
+	-- last_found: 存在を確かめた最後の表示番号。
+	-- first_missing: 存在しないと確かめた最初の表示番号。上限の MAX_IMAGE_COUNT は、調べずに「無い」とみなす。
 	local last_found = 0
-	local first_missing = 1
-	while first_missing < MAX_IMAGE_COUNT and file_exists(build_image_path(image_path, first_missing)) do
-		last_found = first_missing
-		first_missing = first_missing * 2
-	end
-	if first_missing >= MAX_IMAGE_COUNT then
-		return MAX_IMAGE_COUNT
+	local first_missing = nil
+	local probe = 1
+	while first_missing == nil do
+		if probe >= MAX_IMAGE_COUNT then
+			first_missing = MAX_IMAGE_COUNT
+		elseif file_exists(build_image_path(image_path, probe)) then
+			last_found = probe
+			-- 倍にした番号が上限を越えるときは、上限で止める（越えたまま数えると、実際より多くなる）。
+			probe = math.min(probe * 2, MAX_IMAGE_COUNT)
+		else
+			first_missing = probe
+		end
 	end
 	while first_missing - last_found > 1 do
 		local middle = math.floor((last_found + first_missing) / 2)
