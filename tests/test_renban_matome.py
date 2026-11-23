@@ -12,9 +12,9 @@ from PIL import Image, ImageChops
 
 BASE = "連番まとめ（値）"
 SLOT = "連番スロット"
-FORMULA_SLOT = "計算式スロット"
-NUMBER_SLOT = "数値スロット"
-REPEAT_SLOT = "並べスロット"
+FORMULA_SLOT = "連番スロット（計算式）"
+NUMBER_SLOT = "テキスト数値スロット"
+REPEAT_SLOT = "連番スロット（複製並べ）"
 # 土台が対応していない種類のスロット（案内の確認用）。
 UNKNOWN_SLOT = "_試験_未知のスロット"
 
@@ -72,7 +72,7 @@ def slot(
 
 
 def formula_slot(image: Path | str, formula: str, *, outside: str = "表示しない", x: float = 0) -> Effect:
-    """計算式スロット。outside は範囲外の扱い。"""
+    """連番スロット（計算式）。outside は範囲外の扱い。"""
     params: dict[str, object] = {
         "画像": image,
         "計算式": formula,
@@ -85,7 +85,7 @@ def formula_slot(image: Path | str, formula: str, *, outside: str = "表示し�
 def number_slot(
     text: str, *, text_color: str = "ffffff", decoration: str = "縁取り文字", x: float = 0
 ) -> Effect:
-    """数値スロット。text_color は「テキスト」と同じ 16 進数の書き方。"""
+    """テキスト数値スロット。text_color は「テキスト」と同じ 16 進数の書き方。"""
     params: dict[str, object] = {
         "テキスト": text,
         "文字色": text_color,
@@ -105,7 +105,7 @@ def repeat_slot(
     align: str = "左揃え",
     scale: float = 100,
 ) -> Effect:
-    """並べスロット。wrap は折り返しの数（0 は折り返さない）、margin は余白。"""
+    """連番スロット（複製並べ）。wrap は折り返しの数（0 は折り返さない）、margin は余白。"""
     params: dict[str, object] = {
         "画像": image,
         "画像を選ぶ値": f"値{image_value}",
@@ -250,7 +250,7 @@ def test_hide_out_of_range(aviutl2: AviUtl2, value: int, count: int) -> None:
 def test_loop(aviutl2: AviUtl2, value: int, count: int, expected: int) -> None:
     """RM-F14: 「ループ」のとき、枚数以上は先頭に戻り、負の番号は後ろから数える。枚数は自動でも指定でもよい。
 
-    土台の値は -1 までなので、-2 以下は計算式スロットのテストで確かめる。
+    土台の値は -1 までなので、-2 以下は連番スロット（計算式）のテストで確かめる。
     """
     image = aviutl2.render(project(base(value), slot(BAR, outside="ループ", count=count)), [0]).images[0]
 
@@ -286,7 +286,7 @@ def test_unset_slots_are_not_an_error(aviutl2: AviUtl2) -> None:
     assert count_pixels(image, BAR_GREEN) == bar_pixels(2)
 
 
-# ---- 計算式スロット ----
+# ---- 連番スロット（計算式） ----
 
 
 @pytest.mark.parametrize(
@@ -365,7 +365,7 @@ def test_formula_rejected(aviutl2: AviUtl2, formula: str) -> None:
     assert not guided.log_lines("script exception")
 
 
-# ---- 数値スロット ----
+# ---- テキスト数値スロット ----
 
 RED = (255, 0, 0)
 
@@ -382,7 +382,7 @@ def test_number_text(aviutl2: AviUtl2) -> None:
 
 
 def test_number_follows_value(aviutl2: AviUtl2) -> None:
-    """数値スロットは、従う値が変わると、表示する文字が変わる。"""
+    """テキスト数値スロットは、従う値が変わると、表示する文字が変わる。"""
     result = aviutl2.render(project(base("0.00,10.00,直線移動,0"), number_slot("{値1}"), end=10), [0, 10])
 
     assert result.images[0].getbbox() is not None
@@ -407,7 +407,7 @@ def test_number_rejected_formula(aviutl2: AviUtl2) -> None:
     assert guided.images[0].getbbox() is not None
 
 
-# ---- 並べスロット ----
+# ---- 連番スロット（複製並べ） ----
 
 
 def number_white_box(number: int) -> tuple[int, int, int, int]:

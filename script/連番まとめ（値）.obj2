@@ -31,15 +31,15 @@
 --   表示番号が 0〜（枚数-1）の外のときは、「範囲外の扱い」に従う（表示しない／ループ／端で止める）。
 --   枚数は、指定が無ければ、選んだ画像から番号が続く限り数える。
 --
--- 計算式スロット:
+-- 連番スロット（計算式）:
 --   連番スロットと同じだが、表示番号を利用者の計算式で決める（例: "値1 - 1"）。
 --   計算式は、値1〜値8 と数学の関数だけが見える環境で実行する。それ以外の名前（io など）や、
 --   文字列・表・繰り返しを書くための記号と予約語を含む計算式は、実行せずに案内を出す。
 --
--- 数値スロット:
+-- テキスト数値スロット:
 --   テキストの中の {計算式} を計算結果に置き換えて、文字として描く（例: "HP {値1}"）。
 --
--- 並べスロット:
+-- 連番スロット（複製並べ）:
 --   画像を選ぶ値で画像を決め（連番スロットと同じ規則。範囲外は表示しない）、数を決める値の数だけ並べる。
 --   並べる位置は、画像の大きさが分かる、読み込んだ後に決める。
 --
@@ -56,7 +56,7 @@ local SLOT_KIND_SEQUENCE = "連番"
 local SLOT_KIND_FORMULA = "計算式"
 local SLOT_KIND_NUMBER = "数値"
 local SLOT_KIND_REPEAT = "並べ"
--- 並べスロットで並べる数の上限（多すぎると重くなるため）。
+-- 連番スロット（複製並べ）で並べる数の上限（多すぎると重くなるため）。
 local MAX_REPEAT_COUNT = 100
 
 local ALIGN_LEFT = "左揃え"
@@ -96,7 +96,7 @@ local FORMULA_KEYWORDS = {
 -- 計算式に書けない記号。文字列（" '）、表や長い文字列（[ ] { }）、文の区切り（;）を作れないようにする。
 local FORMULA_FORBIDDEN_CHARACTERS = "[\"'%[%]{};]"
 
--- 数値スロットの「文字装飾」の選択肢と、obj.setfont() の装飾の番号（「テキスト」と同じ並び）。
+-- テキスト数値スロットの「文字装飾」の選択肢と、obj.setfont() の装飾の番号（「テキスト」と同じ並び）。
 local TEXT_DECORATION_NUMBERS = {
 	["標準文字"] = 0,
 	["影付き文字"] = 1,
@@ -384,7 +384,7 @@ local function resolve_sequence_slot(effect_key, values)
 	return { { kind = "image", path = path, x = placement.x, y = placement.y, scale = placement.scale } }, nil
 end
 
--- 計算式スロット1つを読み、描くものを決める。
+-- 連番スロット（計算式）1つを読み、描くものを決める。
 -- 戻り値: 描くものの配列、案内の文（不備が無いときは nil）
 local function resolve_formula_slot(effect_key, values)
 	if not has_image(effect_key) then
@@ -407,7 +407,7 @@ local function resolve_formula_slot(effect_key, values)
 	return { { kind = "image", path = path, x = placement.x, y = placement.y, scale = placement.scale } }, nil
 end
 
--- 並べスロット1つを読み、描くものを決める。並べる数だけ、同じ画像を描くものにする。
+-- 連番スロット（複製並べ）1つを読み、描くものを決める。並べる数だけ、同じ画像を描くものにする。
 -- 並べる位置は画像の大きさで決まるので、描くときに layout の情報から計算する。
 -- 戻り値: 描くものの配列、案内の文（不備が無いときは nil）
 local function resolve_repeat_slot(effect_key, values)
@@ -527,7 +527,7 @@ local function fill_text(text, values)
 	return filled, nil
 end
 
--- 数値スロット1つを読み、描くものを決める。
+-- テキスト数値スロット1つを読み、描くものを決める。
 -- 戻り値: 描くものの配列、案内の文（不備が無いときは nil）
 local function resolve_number_slot(effect_key, values)
 	local text = obj.getvalue(effect_key, "テキスト")
@@ -678,7 +678,7 @@ obj.multiobject(object_count, function()
 	local offset_x = 0
 	local offset_y = 0
 	if item.layout ~= nil then
-		-- 並べスロット。並びの中の位置を、拡大率に合わせて広げる。
+		-- 連番スロット（複製並べ）。並びの中の位置を、拡大率に合わせて広げる。
 		local center_x, center_y = repeat_offset(item.layout, item.repeat_index, obj.w, obj.h)
 		offset_x = center_x * item.scale
 		offset_y = center_y * item.scale
