@@ -36,6 +36,9 @@
 --   計算式は、値1〜値8 と数学の関数だけが見える環境で実行する。それ以外の名前（io など）や、
 --   文字列・表・繰り返しを書くための記号と予約語を含む計算式は、実行せずに案内を出す。
 --
+-- 数値スロット:
+--   テキストの中の {計算式} を計算結果に置き換えて、文字として描く（例: "HP {値1}"）。
+--
 -- 描き方:
 --   表示物1つを1つの個別オブジェクトとして描き、スロットの X・Y・拡大率を反映する。
 --   案内を表示するときは、案内を最後の個別オブジェクトとして、土台の位置に描く。
@@ -47,6 +50,7 @@ local MAX_EFFECTS_BELOW = 64
 local SLOT_KIND_ITEM = "スロットの種類"
 local SLOT_KIND_SEQUENCE = "連番"
 local SLOT_KIND_FORMULA = "計算式"
+local SLOT_KIND_NUMBER = "数値"
 -- 枚数を数えるときに調べる番号の上限（これより多い連番は、ここまでとみなす）。
 local MAX_IMAGE_COUNT = 100000
 
@@ -80,6 +84,17 @@ local FORMULA_KEYWORDS = {
 }
 -- 計算式に書けない記号。文字列（" '）、表や長い文字列（[ ] { }）、文の区切り（;）を作れないようにする。
 local FORMULA_FORBIDDEN_CHARACTERS = "[\"'%[%]{};]"
+
+-- 数値スロットの「文字装飾」の選択肢と、obj.setfont() の装飾の番号（「テキスト」と同じ並び）。
+local TEXT_DECORATION_NUMBERS = {
+	["標準文字"] = 0,
+	["影付き文字"] = 1,
+	["影付き文字(薄)"] = 2,
+	["縁取り文字"] = 3,
+	["縁取り文字(細)"] = 4,
+	["縁取り文字(太)"] = 5,
+	["縁取り文字(角)"] = 6,
+}
 
 local GUIDE_FONT = "Yu Gothic UI"
 local GUIDE_FONT_SIZE = 28
@@ -372,6 +387,81 @@ local function resolve_formula_slot(effect_key, values)
 	return { { kind = "image", path = path, x = placement.x, y = placement.y, scale = placement.scale } }, nil
 end
 
+-- チェックボックスの値は、読み方によって 0/1、"0"/"1"、true/false のどれかで返る。
+local function is_checked(value)
+	return value == true or value == 1 or value == "1"
+end
+
+-- 色の項目の値を、0x000000〜0xffffff の数にする（数でも、16進数の文字列でも読めるようにする）。
+local function to_color(value, default_color)
+	if type(value) == "number" then
+		return value
+	end
+	local text = string.gsub(tostring(value), "^0x", "")
+	local color = tonumber(text, 16)
+	if color == nil then
+		return default_color
+	end
+	return color
+end
+
+-- 計算結果を、表示する文字にする。整数なら小数点を付けない。
+local function format_number(number)
+	if number == math.floor(number) then
+		return string.format("%d", number)
+	end
+	return tostring(number)
+end
+
+-- テキストの中の {計算式} を、計算結果に置き換える。
+-- 戻り値: 置き換えたテキスト（計算できない部分があれば nil）、案内の文（問題が無ければ nil）
+local function fill_text(text, values)
+	local guide_line = nil
+	local filled = string.gsub(text, "{(.-)}", function(formula)
+		local result, formula_guide_line = evaluate_formula(formula, values)
+		if result == nil then
+			guide_line = guide_line or formula_guide_line
+			return ""
+		end
+		return format_number(result)
+	end)
+	if guide_line ~= nil then
+		return nil, guide_line
+	end
+	return filled, nil
+end
+
+-- 数値スロット1つを読み、描くものを決める。
+-- 戻り値: 描くものの配列、案内の文（不備が無いときは nil）
+local function resolve_number_slot(effect_key, values)
+	local text = obj.getvalue(effect_key, "テキスト")
+	if type(text) ~= "string" or text == "" then
+		return {}, nil
+	end
+	local filled, guide_line = fill_text(text, values)
+	if filled == nil then
+		return {}, guide_line
+	end
+	local placement = read_slot_placement(effect_key)
+	local item = {
+		kind = "text",
+		text = filled,
+		font = tostring(obj.getvalue(effect_key, "フォント")),
+		size = tonumber(obj.getvalue(effect_key, "サイズ")) or 40,
+		decoration = TEXT_DECORATION_NUMBERS[tostring(obj.getvalue(effect_key, "文字装飾"))] or 0,
+		text_color = to_color(obj.getvalue(effect_key, "文字色"), 0xffffff),
+		edge_color = to_color(obj.getvalue(effect_key, "影・縁色"), 0x000000),
+		bold = is_checked(obj.getvalue(effect_key, "B")),
+		italic = is_checked(obj.getvalue(effect_key, "I")),
+		char_spacing = tonumber(obj.getvalue(effect_key, "字間")) or 0,
+		line_spacing = tonumber(obj.getvalue(effect_key, "行間")) or 0,
+		x = placement.x,
+		y = placement.y,
+		scale = placement.scale,
+	}
+	return { item }, nil
+end
+
 local function should_show_guide()
 	local mode = to_integer(guide_mode)
 	if mode == GUIDE_MODE_ALWAYS then
@@ -425,6 +515,8 @@ for slot_index = 1, #slot_effects do
 			has_any_image = true
 		end
 		items, guide_line = resolve_formula_slot(slot_effect.effect_key, values)
+	elseif slot_effect.kind == SLOT_KIND_NUMBER then
+		items, guide_line = resolve_number_slot(slot_effect.effect_key, values)
 	else
 		guide_line = "この土台は「" .. slot_effect.kind .. "」のスロットに対応していません。"
 	end
@@ -460,10 +552,25 @@ obj.multiobject(object_count, function()
 		return
 	end
 	local item = draw_items[item_index]
-	local loaded = obj.load("image", item.path)
-	if not loaded then
-		obj.alpha = 0
-		return
+	if item.kind == "text" then
+		obj.setfont(
+			item.font,
+			item.size,
+			item.decoration,
+			item.text_color,
+			item.edge_color,
+			item.bold,
+			item.italic,
+			item.char_spacing,
+			item.line_spacing
+		)
+		obj.load("text", item.text)
+	else
+		local loaded = obj.load("image", item.path)
+		if not loaded then
+			obj.alpha = 0
+			return
+		end
 	end
 	-- 位置と大きさは、読み込んだ後に設定する（obj.load() で元に戻るため）。
 	obj.ox = obj.ox + item.x

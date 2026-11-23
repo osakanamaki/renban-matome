@@ -13,6 +13,7 @@ from PIL import Image, ImageChops
 BASE = "連番まとめ（値）"
 SLOT = "連番スロット"
 FORMULA_SLOT = "計算式スロット"
+NUMBER_SLOT = "数値スロット"
 # 土台が対応していない種類のスロット（案内の確認用）。
 UNKNOWN_SLOT = "_試験_未知のスロット"
 
@@ -78,6 +79,19 @@ def formula_slot(image: Path | str, formula: str, *, outside: str = "表示し�
         "X": f"{x:.1f}",
     }
     return Effect(FORMULA_SLOT, params)
+
+
+def number_slot(
+    text: str, *, text_color: str = "ffffff", decoration: str = "縁取り文字", x: float = 0
+) -> Effect:
+    """数値スロット。text_color は「テキスト」と同じ 16 進数の書き方。"""
+    params: dict[str, object] = {
+        "テキスト": text,
+        "文字色": text_color,
+        "文字装飾": decoration,
+        "X": f"{x:.1f}",
+    }
+    return Effect(NUMBER_SLOT, params)
 
 
 def project(
@@ -325,6 +339,48 @@ def test_formula_rejected(aviutl2: AviUtl2, formula: str) -> None:
     assert guided.images[0].getbbox() is not None
     assert count_pixels(guided.images[0], BAR_GREEN) == 0
     assert not guided.log_lines("script exception")
+
+
+# ---- 数値スロット ----
+
+RED = (255, 0, 0)
+
+
+def test_number_text(aviutl2: AviUtl2) -> None:
+    """RM-F40・RM-F41: テキストの中の {計算式} が、計算結果に置き換わって表示される。
+
+    見た目は基準画像（目視で確認済み）と比べる。
+    """
+    result = aviutl2.render(project(base(7, 3), number_slot("HP {値1} / {値1 * 10}  残り {値2 - 1} 回")), [0])
+
+    assert result.images[0].getbbox() is not None
+    aviutl2.assert_snapshot(result)
+
+
+def test_number_follows_value(aviutl2: AviUtl2) -> None:
+    """数値スロットは、従う値が変わると、表示する文字が変わる。"""
+    result = aviutl2.render(project(base("0.00,10.00,直線移動,0"), number_slot("{値1}"), end=10), [0, 10])
+
+    assert result.images[0].getbbox() is not None
+    assert ImageChops.difference(result.images[0], result.images[10]).getbbox() is not None
+
+
+def test_number_text_color(aviutl2: AviUtl2) -> None:
+    """RM-F42: 「テキスト」と同じ書き方の文字色が反映される。"""
+    image = aviutl2.render(
+        project(base(8), number_slot("{値1}", text_color="ff0000", decoration="標準文字")), [0]
+    ).images[0]
+
+    assert count_pixels(image, RED) > 0
+
+
+def test_number_rejected_formula(aviutl2: AviUtl2) -> None:
+    """RM-F32: 使えない計算式を含むテキストは表示せず、案内を出す。"""
+    hidden = aviutl2.render(project(base(1, guide="表示しない"), number_slot("HP {io}")), [0])
+    guided = aviutl2.render(project(base(1, guide="常に"), number_slot("HP {io}")), [0])
+
+    assert hidden.images[0].getbbox() is None
+    assert guided.images[0].getbbox() is not None
 
 
 # ---- 位置と大きさ ----
