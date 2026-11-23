@@ -141,13 +141,37 @@ local function build_image_path(image_path, display_number)
 end
 
 -- ファイルがあるかを確かめる。obj.load() と違い、無くても AviUtl2 のログにエラーが出ない。
+-- AviUtl2 から受け取るパスは UTF-8。io.open() は Windows ではパスを UTF-8 として読まないため、
+-- 日本語を含むパスを開けない。そこで UTF-16 に変換して、Windows の GetFileAttributesW() で確かめる。
 local function file_exists(path)
-	local file = io.open(path, "rb")
-	if file == nil then
+	local ffi = require("ffi")
+	-- スクリプトは描くたびに実行されるので、2回目以降の宣言は「定義済み」のエラーになる。pcall で無視する。
+	pcall(ffi.cdef, [[
+		int MultiByteToWideChar(unsigned int code_page, unsigned long flags, const char *source, int source_length, wchar_t *destination, int destination_length);
+		unsigned long GetFileAttributesW(const wchar_t *file_name);
+	]])
+	-- AviUtl2 の中では ffi.C から kernel32 の関数を引けないため、明示して読み込む。
+	local kernel32 = ffi.load("kernel32")
+	local CP_UTF8 = 65001
+	local INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
+	local FILE_ATTRIBUTE_DIRECTORY = 0x10
+
+	-- 終わりの 0 を含めた長さ（-1 を渡すと、終わりの 0 まで変換する）。
+	local wide_length = kernel32.MultiByteToWideChar(CP_UTF8, 0, path, -1, nil, 0)
+	if wide_length <= 0 then
 		return false
 	end
-	file:close()
-	return true
+	local wide_path = ffi.new("wchar_t[?]", wide_length)
+	if kernel32.MultiByteToWideChar(CP_UTF8, 0, path, -1, wide_path, wide_length) <= 0 then
+		return false
+	end
+
+	local attributes = kernel32.GetFileAttributesW(wide_path)
+	if attributes == INVALID_FILE_ATTRIBUTES then
+		return false
+	end
+	-- フォルダはファイルとして扱わない。
+	return bit.band(attributes, FILE_ATTRIBUTE_DIRECTORY) == 0
 end
 
 -- 選んだ画像から、番号が続く限り数えた枚数を返す（選んだ画像自体が無ければ 0）。

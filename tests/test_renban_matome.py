@@ -3,6 +3,7 @@
 証跡のパスが Windows の上限（260 文字）を超えると描画できないため、テスト名と id は短くする。
 """
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -534,6 +535,30 @@ def test_works_after_renaming_the_files(aviutl2: AviUtl2, renamed_names: tuple[s
 
     assert count_pixels(image, BAR_GREEN) == bar_pixels(5)
     assert_number_at(image, 1040, 3)
+
+
+# ---- 日本語のパス ----
+
+
+@pytest.fixture
+def japanese_bar(tmp_path: Path) -> Path:
+    """フォルダ名とファイル名に日本語を含む、bar の連番の複製。選ぶ画像（てすと_000.png）を返す。"""
+    folder = tmp_path / "てすと"
+    folder.mkdir()
+    for number in range(IMAGE_COUNT):
+        shutil.copyfile(SAMPLES / "bar" / f"bar_{number:03d}.png", folder / f"てすと_{number:03d}.png")
+    return folder / "てすと_000.png"
+
+
+def test_japanese_path(aviutl2: AviUtl2, japanese_bar: Path) -> None:
+    """フォルダ名やファイル名に日本語を含む画像も、表示でき、枚数も数えられる。"""
+    # ループで、枚数（11 枚）を数える処理も通す。値 14 は 3 番目に戻る。
+    slots = (slot(japanese_bar, source=1), slot(japanese_bar, source=2, outside="ループ"))
+    image_shown = aviutl2.render(project(base(3, 0), slots[0]), [0]).images[0]
+    image_loop = aviutl2.render(project(base(0, 14), slots[1]), [0]).images[0]
+
+    assert count_pixels(image_shown, BAR_GREEN) == bar_pixels(3)
+    assert count_pixels(image_loop, BAR_GREEN) == bar_pixels(3)
 
 
 # ---- 案内 ----

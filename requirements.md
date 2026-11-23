@@ -591,6 +591,10 @@ AviUtl2 のスクリプトとして、ソースとともに公開リポジトリ
 - スクリプトファイル（`.obj2` 等）の中では、`io`（`io.open`、`io.lines`、`io.popen`）、`require`、`loadstring`、`setfenv`、`pcall`、`jit` が使える。`require("ffi")` も成功する。`os` は使えない。Lua のバージョン表示は `Lua 5.1`（LuaJIT）。
   - lua.txt の「table, string, math ライブラリのみ利用出来ます」は、「スクリプト制御」についての記述（2.8）。
 - `io.open(パス, "rb")` は、ファイルがあれば開け、無ければ `nil` を返す。このとき AviUtl2 のログにエラーは記録されない。
+  - ただし、フォルダ名やファイル名に日本語を含むパスは、ファイルがあっても開けない（`nil` になる）。AviUtl2 から受け取るパス（`obj.getvalue()` の画像など）は UTF-8 だが、`io.open` は UTF-8 として読まないため。`obj.load("image", ...)` は日本語のパスも読める。
+  - そのため、ファイルの存在は `ffi` で `MultiByteToWideChar`（UTF-8 → UTF-16）と `GetFileAttributesW` を呼んで確かめる。
+- `ffi.C` からは kernel32 の関数を引けない（`cannot resolve symbol` のエラー）。`ffi.load("kernel32")` で読み込めば呼べる。
+- スクリプトは描くたびに実行されるため、`ffi.cdef` で同じ宣言を2回目に行うと「定義済み」のエラーになる。`pcall(ffi.cdef, ...)` で無視する。
 - `loadstring` で読み込んだ関数に `setfenv` で別の環境を与えると、その関数からは、与えた環境の名前だけが見える（`io` などは `nil` になる）。
 - LuaJIT では、`値1` のような日本語の名前を、変数名として使える（`loadstring("return 値1 * 2")` が読み込める）。
 
