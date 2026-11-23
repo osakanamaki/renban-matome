@@ -1,49 +1,111 @@
 --label:連番まとめ
 --information:連番まとめ（値） v0.3.0
 --require:2011700
---group:値1,true
---track@value1:値1::値,-1,999,0,1
---string@export_name1:値1::公開名,
---group:値2,false
---track@value2:値2::値,-1,999,0,1
---string@export_name2:値2::公開名,
---group:値3,false
---track@value3:値3::値,-1,999,0,1
---string@export_name3:値3::公開名,
---group:値4,false
---track@value4:値4::値,-1,999,0,1
---string@export_name4:値4::公開名,
---group
---select@guide_mode:案内の表示=1,編集中だけ=1,常に=2,表示しない=3
+--track@value1:値1,-1,999,0,1
+--track@value2:値2,-1,999,0,1
+--track@value3:値3,-1,999,0,1
+--track@value4:値4,-1,999,0,1
+--track@value5:値5,-1,999,0,1
+--track@value6:値6,-1,999,0,1
+--track@value7:値7,-1,999,0,1
+--track@value8:値8,-1,999,0,1
+--select@guide_mode:案内の表示=1,選択中だけ=1,常に=2,表示しない=3
 
 -- 連番まとめ（値）
 --
--- 連番画像をまとめて切り替える「土台」。HP・MP のような状態表示に向けて、独立した値を4つ持つ。
--- 表示する連番画像は、このオブジェクトに付けたフィルタ効果「連番スロット」で指定する。
+-- 連番画像などをまとめて切り替える「土台」。HP・MP のような状態表示に向けて、独立した値を8つ持つ。
+-- 表示するものは、このオブジェクトに付けたフィルタ効果「スロット」で指定する。
 --
 -- 役割の分担:
---   土台（このスクリプト）: 値を持ち、公開し、連番スロットの画像をまとめて描く。
---   連番スロット: 1つの連番画像と、従う値・オフセット・上限を持つだけ（何もしない）。
+--   土台（このスクリプト）: 値を持ち、付いているスロットの内容をまとめて描く。
+--   スロット: 1つの表示物の設定を持つだけ（スロット自身は何もしない）。
 --
--- 表示番号 = 従う値 + オフセット（0 が先頭画像）
--- 表示する画像 = 先頭画像のファイル名の、拡張子の直前の数字に、表示番号を足した番号の画像
--- 表示番号が負、上限を超える、または画像が無いときは、そのスロットは何も表示しない（意図的な非表示）。
+-- スロットの見分け方:
+--   スロットは、設定画面に出ない「スロットの種類」の項目を持つ（例: "連番"）。
+--   土台は、付いているフィルタ効果のこの項目を読んで、スロットかどうかと種類を見分ける。
+--   効果名では見分けないので、利用者がファイル名を変えても動く。
+--
+-- 連番スロット:
+--   表示番号 = 従う値（小数点以下は切り捨て）。0 のとき、選んだ画像を表示する。
+--   表示する画像 = 選んだ画像のファイル名の、拡張子の直前の数字に、表示番号を足した番号の画像
+--   表示番号が 0〜（枚数-1）の外のときは、「範囲外の扱い」に従う（表示しない／ループ／端で止める）。
+--   枚数は、指定が無ければ、選んだ画像から番号が続く限り数える。
+--
+-- 連番スロット（計算式）:
+--   連番スロットと同じだが、表示番号を利用者の計算式で決める（例: "値1 - 1"）。
+--   計算式は、値1〜値8 と数学の関数だけが見える環境で実行する。それ以外の名前（io など）や、
+--   文字列・表・繰り返しを書くための記号と予約語を含む計算式は、実行せずに案内を出す。
+--
+-- テキスト数値スロット:
+--   テキストの中の {計算式} を計算結果に置き換えて、文字として描く（例: "HP {値1}"）。
+--
+-- 連番スロット（複製並べ）:
+--   画像を選ぶ値で画像を決め（連番スロットと同じ規則。範囲外は表示しない）、数を決める値の数だけ並べる。
+--   並べる位置は、画像の大きさが分かる、読み込んだ後に決める。
 --
 -- 描き方:
---   連番スロット1つを1つの個別オブジェクトとして描き、スロットの X・Y・拡大率を反映する。
+--   表示物1つを1つの個別オブジェクトとして描き、スロットの X・Y・拡大率を反映する。
 --   案内を表示するときは、案内を最後の個別オブジェクトとして、土台の位置に描く。
---   個別オブジェクトの番号は利用者との取り決めにしない（要件 RM-F18 は取り下げ）。
 
-local VALUE_COUNT = 4
+local VALUE_COUNT = 8
 -- 自分より下のフィルタ効果を何個まで調べるか。範囲外も「スクリプト以外」も空のテキストになり区別できないため、上限を決める。
 local MAX_EFFECTS_BELOW = 64
--- 連番スロットだけが持つ項目。フィルタ効果が連番スロットかどうかの判定に使う。
--- （利用者がファイル名を変えても動くよう、効果名では判定しない）
-local SLOT_MARKER_ITEM = "従う値"
+-- スロットが持つ、設定画面に出ない項目。値はスロットの種類。
+local SLOT_KIND_ITEM = "スロットの種類"
+local SLOT_KIND_SEQUENCE = "連番"
+local SLOT_KIND_FORMULA = "計算式"
+local SLOT_KIND_NUMBER = "数値"
+local SLOT_KIND_REPEAT = "並べ"
+-- 連番スロット（複製並べ）で並べる数の上限（多すぎると重くなるため）。
+local MAX_REPEAT_COUNT = 100
 
-local GUIDE_MODE_EDITING_ONLY = 1
+local ALIGN_LEFT = "左揃え"
+local ALIGN_CENTER = "中央揃え"
+local ALIGN_RIGHT = "右揃え"
+-- 枚数を数えるときに調べる番号の上限（これより多い連番は、ここまでとみなす）。
+local MAX_IMAGE_COUNT = 100000
+
+local GUIDE_MODE_SELECTED_ONLY = 1
 local GUIDE_MODE_ALWAYS = 2
 local GUIDE_MODE_NEVER = 3
+
+local OUT_OF_RANGE_HIDE = "表示しない"
+local OUT_OF_RANGE_LOOP = "ループ"
+local OUT_OF_RANGE_CLAMP = "端で止める"
+
+-- 計算式で使える、数学の関数と定数（math.random は、描くたびに結果が変わるので除く）。
+local FORMULA_MATH_NAMES = {
+	abs = true,
+	ceil = true,
+	floor = true,
+	fmod = true,
+	max = true,
+	min = true,
+	sqrt = true,
+	pi = true,
+	huge = true,
+}
+-- 計算式に書ける予約語（条件の組み立てに使うものだけ。繰り返しや関数を作る予約語は書けない）。
+local FORMULA_KEYWORDS = {
+	["and"] = true,
+	["or"] = true,
+	["not"] = true,
+	["true"] = true,
+	["false"] = true,
+}
+-- 計算式に書けない記号。文字列（" '）、表や長い文字列（[ ] { }）、文の区切り（;）を作れないようにする。
+local FORMULA_FORBIDDEN_CHARACTERS = "[\"'%[%]{};]"
+
+-- テキスト数値スロットの「文字装飾」の選択肢と、obj.setfont() の装飾の番号（「テキスト」と同じ並び）。
+local TEXT_DECORATION_NUMBERS = {
+	["標準文字"] = 0,
+	["影付き文字"] = 1,
+	["影付き文字(薄)"] = 2,
+	["縁取り文字"] = 3,
+	["縁取り文字(細)"] = 4,
+	["縁取り文字(太)"] = 5,
+	["縁取り文字(角)"] = 6,
+}
 
 local GUIDE_FONT = "Yu Gothic UI"
 local GUIDE_FONT_SIZE = 28
@@ -59,28 +121,136 @@ local function to_integer(value)
 	return math.floor(number)
 end
 
--- チェックボックスの値は、読み方によって 0/1、"0"/"1"、true/false のどれかで返る。
-local function is_checked(value)
-	return value == true or value == 1 or value == "1"
-end
-
--- 先頭画像のパスを、番号の前・番号・拡張子に分ける。連番の規則に合わないときは nil を返す。
+-- 選んだ画像のパスを、番号の前・番号・拡張子に分ける。連番の規則に合わないときは nil を返す。
 -- 例: "C:\a\bar_000.png" → "C:\a\bar_", "000", ".png"
-local function split_first_image_path(first_image_path)
-	local prefix, digits, extension = string.match(first_image_path, "^(.-)(%d+)(%.[^%.\\/]+)$")
+local function split_image_path(image_path)
+	local prefix, digits, extension = string.match(image_path, "^(.-)(%d+)(%.[^%.\\/]+)$")
 	if digits == nil then
 		return nil
 	end
 	return prefix, digits, extension
 end
 
--- 先頭画像のパスと表示番号から、表示する画像のパスを作る。
+-- 選んだ画像のパスと表示番号から、表示する画像のパスを作る。
 -- 例: "C:\a\bar_000.png" と 7 → "C:\a\bar_007.png"
-local function build_image_path(first_image_path, display_number)
-	local prefix, digits, extension = split_first_image_path(first_image_path)
+local function build_image_path(image_path, display_number)
+	local prefix, digits, extension = split_image_path(image_path)
 	local image_number = tonumber(digits) + display_number
 	local number_text = string.format("%0" .. string.len(digits) .. "d", image_number)
 	return prefix .. number_text .. extension
+end
+
+-- 描くたびに作り直さず、使い回すもの（kernel32 の読み込みと、数えた枚数）を置く表。
+-- AviUtl2 の Lua の状態は、スクリプトの実行（フレーム）をまたいで残り、ほかのスクリプトとも共有される。
+-- そこで、package.loaded の中の、このスクリプト専用の名前の場所に置く（グローバル変数は増やさない）。
+local SHARED_STATE_KEY = "renban-matome（値）"
+local shared_state = package.loaded[SHARED_STATE_KEY]
+if shared_state == nil then
+	shared_state = {
+		-- ffi.load("kernel32") の結果（初めて使うときに読み込む）。
+		kernel32 = nil,
+		-- 選んだ画像のパス → 数えた枚数。
+		image_counts = {},
+	}
+	package.loaded[SHARED_STATE_KEY] = shared_state
+end
+
+local ffi = require("ffi")
+
+-- kernel32 の関数を使えるようにして返す。宣言と読み込みは、Lua の状態ごとに一度だけ行う。
+-- ffi.cdef は、同じ名前の関数が既に宣言されているとき、エラーにせず先の宣言を使い続ける。
+-- ほかのスクリプトが同じ関数を違う型で宣言していても影響を受けないよう、__asm__ で本当の名前を指し、
+-- このスクリプト専用の名前で宣言する。
+local function load_kernel32()
+	if shared_state.kernel32 == nil then
+		ffi.cdef([[
+			int renban_matome_MultiByteToWideChar(unsigned int code_page, unsigned long flags, const char *source, int source_length, wchar_t *destination, int destination_length) __asm__("MultiByteToWideChar");
+			unsigned long renban_matome_GetFileAttributesW(const wchar_t *file_name) __asm__("GetFileAttributesW");
+		]])
+		-- AviUtl2 の中では ffi.C から kernel32 の関数を引けないため、明示して読み込む。
+		shared_state.kernel32 = ffi.load("kernel32")
+	end
+	return shared_state.kernel32
+end
+
+-- ファイルがあるかを確かめる。obj.load() と違い、無くても AviUtl2 のログにエラーが出ない。
+-- AviUtl2 から受け取るパスは UTF-8。io.open() は Windows ではパスを UTF-8 として読まないため、
+-- 日本語を含むパスを開けない。そこで UTF-16 に変換して、Windows の GetFileAttributesW() で確かめる。
+local function file_exists(path)
+	local kernel32 = load_kernel32()
+	local CP_UTF8 = 65001
+	local INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
+	local FILE_ATTRIBUTE_DIRECTORY = 0x10
+
+	-- 終わりの 0 を含めた長さ（-1 を渡すと、終わりの 0 まで変換する）。
+	local wide_length = kernel32.renban_matome_MultiByteToWideChar(CP_UTF8, 0, path, -1, nil, 0)
+	if wide_length <= 0 then
+		return false
+	end
+	local wide_path = ffi.new("wchar_t[?]", wide_length)
+	if kernel32.renban_matome_MultiByteToWideChar(CP_UTF8, 0, path, -1, wide_path, wide_length) <= 0 then
+		return false
+	end
+
+	local attributes = kernel32.renban_matome_GetFileAttributesW(wide_path)
+	if attributes == INVALID_FILE_ATTRIBUTES then
+		return false
+	end
+	-- フォルダはファイルとして扱わない。
+	return bit.band(attributes, FILE_ATTRIBUTE_DIRECTORY) == 0
+end
+
+-- 選んだ画像から、番号が続く限り数えた枚数を返す（選んだ画像自体が無ければ 0）。
+-- 番号の抜けは無いものとして、存在する範囲を倍々に広げてから、二分探索で境目を探す。
+local function count_images(image_path)
+	if not file_exists(build_image_path(image_path, 0)) then
+		return 0
+	end
+	-- last_found: 存在を確かめた最後の表示番号。
+	-- first_missing: 存在しないと確かめた最初の表示番号。上限の MAX_IMAGE_COUNT は、調べずに「無い」とみなす。
+	local last_found = 0
+	local first_missing = nil
+	local probe = 1
+	while first_missing == nil do
+		if probe >= MAX_IMAGE_COUNT then
+			first_missing = MAX_IMAGE_COUNT
+		elseif file_exists(build_image_path(image_path, probe)) then
+			last_found = probe
+			-- 倍にした番号が上限を越えるときは、上限で止める（越えたまま数えると、実際より多くなる）。
+			probe = math.min(probe * 2, MAX_IMAGE_COUNT)
+		else
+			first_missing = probe
+		end
+	end
+	while first_missing - last_found > 1 do
+		local middle = math.floor((last_found + first_missing) / 2)
+		if file_exists(build_image_path(image_path, middle)) then
+			last_found = middle
+		else
+			first_missing = middle
+		end
+	end
+	return last_found + 1
+end
+
+-- 前に数えた枚数が、今も正しいかを確かめる（最後の画像があり、その次の画像が無いか）。
+-- 数え直すより少ない回数（2回）で済む。番号の抜けは無いものとする（count_images と同じ）。
+local function is_image_count_current(image_path, image_count)
+	local last_exists = image_count == 0 or file_exists(build_image_path(image_path, image_count - 1))
+	local next_missing = image_count >= MAX_IMAGE_COUNT or not file_exists(build_image_path(image_path, image_count))
+	return last_exists and next_missing
+end
+
+-- 選んだ画像からの枚数を返す。描くたびに数え直さないよう、数えた枚数を使い回す。
+-- 画像を足したり消したりして、前の枚数が合わなくなったときは数え直す。
+local function image_count_of(image_path)
+	local image_count = shared_state.image_counts[image_path]
+	if image_count ~= nil and is_image_count_current(image_path, image_count) then
+		return image_count
+	end
+	image_count = count_images(image_path)
+	shared_state.image_counts[image_path] = image_count
+	return image_count
 end
 
 -- パスからファイル名だけを取り出す（案内の表示用）。
@@ -92,7 +262,7 @@ local function file_name_of(path)
 	return name
 end
 
--- 「値1」〜「値4」の名前から、値の番号を返す。読めないときは nil。
+-- 「値1」〜「値8」の名前から、値の番号を返す。読めないときは nil。
 local function value_number_of(source_name)
 	local number = tonumber(string.match(tostring(source_name), "(%d+)$"))
 	if number == nil or number < 1 or number > VALUE_COUNT then
@@ -101,8 +271,31 @@ local function value_number_of(source_name)
 	return number
 end
 
--- このオブジェクトに付いている連番スロットを、上から順に集める。
--- 戻り値: { effect_key = "効果名:n", ... } の配列
+-- スロットの項目を読む（読めないときは nil）。
+-- obj.getvalue() は、対象が無いとき値を返さない（nil も返さない）。結果を直接 tostring() や tonumber() に
+-- 渡すと「引数が無い」エラーで土台全体が止まるので、いったん変数に受けて nil にそろえる。
+local function read_item(effect_key, item_name)
+	local value = obj.getvalue(effect_key, item_name)
+	return value
+end
+
+-- スロットの項目を数として読む（読めないときは default）。
+local function read_number(effect_key, item_name, default)
+	local value = read_item(effect_key, item_name)
+	return tonumber(value) or default
+end
+
+-- スロットの項目を文字列として読む（読めないときは空の文字列）。
+local function read_text(effect_key, item_name)
+	local value = read_item(effect_key, item_name)
+	if value == nil then
+		return ""
+	end
+	return tostring(value)
+end
+
+-- このオブジェクトに付いているスロットを、上から順に集める。
+-- 戻り値: { effect_key = "効果名:n", kind = "連番" など } の配列
 local function find_slot_effects()
 	local slot_effects = {}
 	-- 同じ効果名の、何番目のインスタンスか（obj.getvalue の ":n" に使う）。
@@ -114,54 +307,363 @@ local function find_slot_effects()
 			local instance_number = instance_count_by_name[effect_name] or 0
 			instance_count_by_name[effect_name] = instance_number + 1
 			local effect_key = effect_name .. ":" .. instance_number
-			local marker = obj.getvalue(effect_key, SLOT_MARKER_ITEM)
-			if marker ~= nil then
-				slot_effects[#slot_effects + 1] = { effect_key = effect_key }
+			local kind = read_item(effect_key, SLOT_KIND_ITEM)
+			if kind ~= nil then
+				slot_effects[#slot_effects + 1] = { effect_key = effect_key, kind = tostring(kind) }
 			end
 		end
 	end
 	return slot_effects
 end
 
--- 連番スロット1つの、位置と大きさの設定を読む。
+-- スロット1つの、位置と大きさの設定を読む。
 -- 戻り値: { x = 土台からのずれ, y = 土台からのずれ, scale = 倍率（1.0 が等倍） }
 local function read_slot_placement(effect_key)
-	local position_x = tonumber(obj.getvalue(effect_key, "X")) or 0
-	local position_y = tonumber(obj.getvalue(effect_key, "Y")) or 0
-	local scale_percent = tonumber(obj.getvalue(effect_key, "拡大率")) or 100
+	local position_x = read_number(effect_key, "X", 0)
+	local position_y = read_number(effect_key, "Y", 0)
+	local scale_percent = read_number(effect_key, "拡大率", 100)
 	return { x = position_x, y = position_y, scale = scale_percent / 100 }
 end
 
--- 連番スロット1つの設定を読み、表示する画像のパスを決める。
+-- 表示番号を、範囲外の扱いに従って、0〜（枚数-1）に収める。表示しないときは nil を返す。
+local function apply_out_of_range(display_number, image_count, out_of_range)
+	if display_number >= 0 and display_number < image_count then
+		return display_number
+	end
+	if image_count <= 0 then
+		return nil
+	end
+	if out_of_range == OUT_OF_RANGE_LOOP then
+		-- Lua の % は、割る数が正なら 0 以上を返す（-1 % 10 = 9）。負の番号は後ろから数えることになる。
+		return display_number % image_count
+	end
+	if out_of_range == OUT_OF_RANGE_CLAMP then
+		if display_number < 0 then
+			return 0
+		end
+		return image_count - 1
+	end
+	return nil
+end
+
+-- スロットに画像が設定されているか。
+local function has_image(effect_key)
+	local image_path = read_item(effect_key, "画像")
+	return type(image_path) == "string" and image_path ~= ""
+end
+
+-- 画像を使うスロットの、表示する画像のパスを決める。
+-- out_of_range は範囲外の扱い、image_count は枚数（0 以下なら自動で数える）。
 -- 戻り値: 画像のパス（表示しないときは nil）、案内の文（不備が無いときは nil）
-local function resolve_slot(effect_key, values)
-	local first_image_path = obj.getvalue(effect_key, "画像")
-	if type(first_image_path) ~= "string" or first_image_path == "" then
-		return nil, nil
+local function resolve_image_path(effect_key, display_number, out_of_range, image_count)
+	local image_path = read_item(effect_key, "画像")
+	if split_image_path(image_path) == nil then
+		return nil, "連番として扱えないファイル名です：" .. file_name_of(image_path) .. "\n（拡張子の直前に番号が必要です）"
 	end
-	if split_first_image_path(first_image_path) == nil then
-		return nil,
-			"連番として扱えないファイル名です：" .. file_name_of(first_image_path) .. "\n（拡張子の直前に番号が必要です）"
+	if not file_exists(image_path) then
+		return nil, "選んだ画像が見つかりません：" .. file_name_of(image_path)
 	end
-
-	local source_name = obj.getvalue(effect_key, "従う値")
-	local value_number = value_number_of(source_name)
-	if value_number == nil then
-		return nil, "この土台には「" .. tostring(source_name) .. "」がありません。"
-	end
-
-	local offset = to_integer(obj.getvalue(effect_key, "オフセット"))
-	local display_number = values[value_number] + offset
-	if display_number < 0 then
-		return nil, nil
-	end
-	if is_checked(obj.getvalue(effect_key, "上限を使う")) then
-		local limit = to_integer(obj.getvalue(effect_key, "上限"))
-		if display_number > limit then
+	if image_count <= 0 then
+		-- 枚数の指定が無い。
+		if out_of_range == OUT_OF_RANGE_HIDE then
+			-- 表示しないときは、枚数を数えなくても、表示する画像があるかだけ確かめればよい。
+			if display_number < 0 then
+				return nil, nil
+			end
+			local path = build_image_path(image_path, display_number)
+			if file_exists(path) then
+				return path, nil
+			end
 			return nil, nil
 		end
+		image_count = image_count_of(image_path)
 	end
-	return build_image_path(first_image_path, display_number), nil
+	local number = apply_out_of_range(display_number, image_count, out_of_range)
+	if number == nil then
+		return nil, nil
+	end
+	local path = build_image_path(image_path, number)
+	if not file_exists(path) then
+		-- 枚数の指定が、実際の枚数より多い。
+		return nil, nil
+	end
+	return path, nil
+end
+
+-- 計算式の中の名前が「値1」〜「値8」のどれかか。
+local function is_formula_value_name(name)
+	local number = tonumber(string.match(name, "^値(%d+)$"))
+	return number ~= nil and number >= 1 and number <= VALUE_COUNT
+end
+
+-- 計算式に、使ってよい名前だけが書かれているかを確かめる。
+-- 戻り値: 問題が無ければ nil、あれば案内に出す理由
+local function find_formula_problem(formula)
+	if string.find(formula, FORMULA_FORBIDDEN_CHARACTERS) then
+		return "使えない記号（\" ' [ ] { } ;）があります"
+	end
+	-- 名前（英字・_・日本語などで始まる並び）を、前から順に調べる。
+	for start, name in string.gmatch(formula, "()([%a_\128-\255][%w_\128-\255]*)") do
+		local before = ""
+		if start > 1 then
+			before = string.sub(formula, start - 1, start - 1)
+		end
+		local after_math = start > 5 and string.sub(formula, start - 5, start - 1) == "math."
+		if after_math then
+			if not FORMULA_MATH_NAMES[name] then
+				return "使えない関数です：math." .. name
+			end
+		elseif before == "." then
+			-- math. 以外の、表の中身は参照できない。
+			return "使えない名前です：" .. name
+		elseif string.find(before, "%d") then
+			-- 1e5 の e5 や 0x1F の x1F は、数の一部なので名前ではない。
+		elseif not (FORMULA_KEYWORDS[name] or name == "math" or is_formula_value_name(name)) then
+			return "使えない名前です：" .. name
+		end
+	end
+	return nil
+end
+
+-- 計算式を計算する。値は「値1」〜「値8」の名前で参照できる。
+-- 戻り値: 計算結果の数（計算できないときは nil）、案内の文（計算できたときは nil）
+local function evaluate_formula(formula, values)
+	if type(formula) ~= "string" or formula == "" then
+		return nil, "計算式が空です。"
+	end
+	local problem = find_formula_problem(formula)
+	if problem ~= nil then
+		return nil, "計算式を計算できません：" .. formula .. "\n（" .. problem .. "）"
+	end
+	-- 括弧で囲み、1つの式として読み込ませる。
+	local chunk = loadstring("return (" .. formula .. ")")
+	if chunk == nil then
+		return nil, "計算式を読めません：" .. formula
+	end
+	-- 計算式から見える名前を、値と数学の関数だけにする（io などは見えない）。
+	local formula_math = {}
+	for name in pairs(FORMULA_MATH_NAMES) do
+		formula_math[name] = math[name]
+	end
+	local environment = { math = formula_math }
+	for value_number = 1, VALUE_COUNT do
+		environment["値" .. value_number] = values[value_number]
+	end
+	setfenv(chunk, environment)
+	local succeeded, result = pcall(chunk)
+	local number = tonumber(result)
+	-- 数でない結果と、無限大・非数（NaN は自分自身と等しくない）は使えない。
+	if not succeeded or number == nil or number ~= number or number == math.huge or number == -math.huge then
+		return nil, "計算式の結果が数になりません：" .. formula
+	end
+	return number, nil
+end
+
+-- 連番スロット1つを読み、描くものを決める。
+-- 戻り値: 描くものの配列、案内の文（不備が無いときは nil）
+local function resolve_sequence_slot(effect_key, values)
+	if not has_image(effect_key) then
+		return {}, nil
+	end
+	local source_name = read_item(effect_key, "従う値")
+	local value_number = value_number_of(source_name)
+	if value_number == nil then
+		return {}, "この土台には「" .. tostring(source_name) .. "」がありません。"
+	end
+	local path, guide_line = resolve_image_path(
+		effect_key,
+		values[value_number],
+		read_text(effect_key, "範囲外の扱い"),
+		to_integer(read_item(effect_key, "枚数"))
+	)
+	if path == nil then
+		return {}, guide_line
+	end
+	local placement = read_slot_placement(effect_key)
+	return { { kind = "image", path = path, x = placement.x, y = placement.y, scale = placement.scale } }, nil
+end
+
+-- 連番スロット（計算式）1つを読み、描くものを決める。
+-- 戻り値: 描くものの配列、案内の文（不備が無いときは nil）
+local function resolve_formula_slot(effect_key, values)
+	if not has_image(effect_key) then
+		return {}, nil
+	end
+	local result, guide_line = evaluate_formula(read_item(effect_key, "計算式"), values)
+	if result == nil then
+		return {}, guide_line
+	end
+	local path, image_guide_line = resolve_image_path(
+		effect_key,
+		math.floor(result),
+		read_text(effect_key, "範囲外の扱い"),
+		to_integer(read_item(effect_key, "枚数"))
+	)
+	if path == nil then
+		return {}, image_guide_line
+	end
+	local placement = read_slot_placement(effect_key)
+	return { { kind = "image", path = path, x = placement.x, y = placement.y, scale = placement.scale } }, nil
+end
+
+-- 連番スロット（複製並べ）1つを読み、描くものを決める。並べる数だけ、同じ画像を描くものにする。
+-- 並べる位置は画像の大きさで決まるので、描くときに layout の情報から計算する。
+-- 戻り値: 描くものの配列、案内の文（不備が無いときは nil）
+local function resolve_repeat_slot(effect_key, values)
+	if not has_image(effect_key) then
+		return {}, nil
+	end
+	local image_value_name = read_item(effect_key, "画像を選ぶ値")
+	local count_value_name = read_item(effect_key, "数を決める値")
+	local image_value_number = value_number_of(image_value_name)
+	local count_value_number = value_number_of(count_value_name)
+	if image_value_number == nil then
+		return {}, "この土台には「" .. tostring(image_value_name) .. "」がありません。"
+	end
+	if count_value_number == nil then
+		return {}, "この土台には「" .. tostring(count_value_name) .. "」がありません。"
+	end
+	local repeat_count = math.min(values[count_value_number], MAX_REPEAT_COUNT)
+	if repeat_count <= 0 then
+		return {}, nil
+	end
+	local path, guide_line = resolve_image_path(effect_key, values[image_value_number], OUT_OF_RANGE_HIDE, 0)
+	if path == nil then
+		return {}, guide_line
+	end
+	local placement = read_slot_placement(effect_key)
+	local wrap_count = to_integer(read_item(effect_key, "折り返しの数"))
+	if wrap_count <= 0 then
+		wrap_count = repeat_count
+	end
+	local layout = {
+		total = repeat_count,
+		per_row = wrap_count,
+		margin = read_number(effect_key, "余白", 0),
+		align = read_text(effect_key, "並べ方"),
+	}
+	local items = {}
+	for repeat_index = 0, repeat_count - 1 do
+		items[#items + 1] = {
+			kind = "image",
+			path = path,
+			x = placement.x,
+			y = placement.y,
+			scale = placement.scale,
+			layout = layout,
+			repeat_index = repeat_index,
+		}
+	end
+	return items, nil
+end
+
+-- 並べる画像1つの、並びの基準（土台の位置）からの中心の位置を返す。
+-- width・height は画像の大きさ。
+local function repeat_offset(layout, repeat_index, width, height)
+	local cell_width = width + layout.margin * 2
+	local cell_height = height + layout.margin * 2
+	local row = math.floor(repeat_index / layout.per_row)
+	local column = repeat_index % layout.per_row
+	-- この行に並ぶ数（最後の行は少ないことがある）。
+	local row_length = math.min(layout.per_row, layout.total - row * layout.per_row)
+	local center_x
+	if layout.align == ALIGN_RIGHT then
+		-- 行の右端を基準に合わせる。
+		center_x = (column - row_length) * cell_width + cell_width / 2
+	elseif layout.align == ALIGN_CENTER then
+		-- 行の中央を基準に合わせる。
+		center_x = (column - (row_length - 1) / 2) * cell_width
+	else
+		-- 左揃え。行の左端を基準に合わせる。
+		center_x = column * cell_width + cell_width / 2
+	end
+	-- 並びの上端を基準に合わせる。
+	local center_y = row * cell_height + cell_height / 2
+	return center_x, center_y
+end
+
+-- チェックボックスの値は、読み方によって 0/1、"0"/"1"、true/false のどれかで返る。
+local function is_checked(value)
+	return value == true or value == 1 or value == "1"
+end
+
+-- 色の項目の値を、0x000000〜0xffffff の数にする（数でも、16進数の文字列でも読めるようにする）。
+local function to_color(value, default_color)
+	if type(value) == "number" then
+		return value
+	end
+	local text = string.gsub(tostring(value), "^0x", "")
+	local color = tonumber(text, 16)
+	if color == nil then
+		return default_color
+	end
+	return color
+end
+
+-- 全桁を正確に表せる整数の上限（Lua の数は倍精度の浮動小数点数で、仮数は 53 bit）。
+local EXACT_INTEGER_LIMIT = 2 ^ 53
+
+-- 計算結果を、表示する文字にする。整数なら小数点を付けない。
+local function format_number(number)
+	if number == 0 then
+		-- -0 を "-0" と書かないように、0 として書く。
+		return "0"
+	end
+	if number == math.floor(number) and math.abs(number) <= EXACT_INTEGER_LIMIT then
+		-- %d は 64bit 整数に収まらない数を正しく書けないため、小数点以下 0 桁の %.0f で書く。
+		return string.format("%.0f", number)
+	end
+	-- 小数と、全桁を正確に表せない大きな整数は、Lua の書き方（有効数字 14 桁、必要なら指数の形）にする。
+	return tostring(number)
+end
+
+-- テキストの中の {計算式} を、計算結果に置き換える。
+-- 戻り値: 置き換えたテキスト（計算できない部分があれば nil）、案内の文（問題が無ければ nil）
+local function fill_text(text, values)
+	local guide_line = nil
+	local filled = string.gsub(text, "{(.-)}", function(formula)
+		local result, formula_guide_line = evaluate_formula(formula, values)
+		if result == nil then
+			guide_line = guide_line or formula_guide_line
+			return ""
+		end
+		return format_number(result)
+	end)
+	if guide_line ~= nil then
+		return nil, guide_line
+	end
+	return filled, nil
+end
+
+-- テキスト数値スロット1つを読み、描くものを決める。
+-- 戻り値: 描くものの配列、案内の文（不備が無いときは nil）
+local function resolve_number_slot(effect_key, values)
+	local text = read_item(effect_key, "テキスト")
+	if type(text) ~= "string" or text == "" then
+		return {}, nil
+	end
+	local filled, guide_line = fill_text(text, values)
+	if filled == nil then
+		return {}, guide_line
+	end
+	local placement = read_slot_placement(effect_key)
+	local item = {
+		kind = "text",
+		text = filled,
+		font = read_text(effect_key, "フォント"),
+		size = read_number(effect_key, "サイズ", 40),
+		decoration = TEXT_DECORATION_NUMBERS[read_text(effect_key, "文字装飾")] or 0,
+		text_color = to_color(read_item(effect_key, "文字色"), 0xffffff),
+		edge_color = to_color(read_item(effect_key, "影・縁色"), 0x000000),
+		bold = is_checked(read_item(effect_key, "B")),
+		italic = is_checked(read_item(effect_key, "I")),
+		char_spacing = read_number(effect_key, "字間", 0),
+		line_spacing = read_number(effect_key, "行間", 0),
+		x = placement.x,
+		y = placement.y,
+		scale = placement.scale,
+	}
+	return { item }, nil
 end
 
 local function should_show_guide()
@@ -172,7 +674,7 @@ local function should_show_guide()
 	if mode == GUIDE_MODE_NEVER then
 		return false
 	end
-	-- 編集中だけ。動画の出力中は obj.getoption("gui") が false になる。
+	-- 選択中だけ。obj.getoption("gui") は、土台を選択してプレビューしているときだけ true になる。
 	return obj.getoption("gui") == true
 end
 
@@ -182,52 +684,71 @@ local function load_guide_text(guide_lines)
 	obj.load("text", "[連番まとめ]\n" .. table.concat(guide_lines, "\n"))
 end
 
--- 値を集め、公開名があれば公開する（テキストなどから global.名前 で参照できる）。
+-- 値を集める（小数点以下は切り捨て）。
+-- 設定項目はスクリプトのローカル変数になり、名前で引けないため、明示して並べる。
 local values = {
 	to_integer(value1),
 	to_integer(value2),
 	to_integer(value3),
 	to_integer(value4),
+	to_integer(value5),
+	to_integer(value6),
+	to_integer(value7),
+	to_integer(value8),
 }
-local export_names = { export_name1, export_name2, export_name3, export_name4 }
-for value_number = 1, VALUE_COUNT do
-	local export_name = export_names[value_number]
-	if type(export_name) == "string" and export_name ~= "" then
-		global[export_name] = values[value_number]
-	end
-end
 
--- 連番スロットごとに、表示する画像と、案内の文を決める。
+-- スロットごとに、描くものと、案内の文を決める。
 local slot_effects = find_slot_effects()
-local image_paths = {}
-local placements = {}
+local draw_items = {}
 local guide_lines = {}
-local has_any_first_image = false
+local image_slot_count = 0
+local has_any_image = false
 for slot_index = 1, #slot_effects do
-	local effect_key = slot_effects[slot_index].effect_key
-	local first_image_path = obj.getvalue(effect_key, "画像")
-	if type(first_image_path) == "string" and first_image_path ~= "" then
-		has_any_first_image = true
+	local slot_effect = slot_effects[slot_index]
+	local items = {}
+	local guide_line = nil
+	if slot_effect.kind == SLOT_KIND_SEQUENCE then
+		image_slot_count = image_slot_count + 1
+		if has_image(slot_effect.effect_key) then
+			has_any_image = true
+		end
+		items, guide_line = resolve_sequence_slot(slot_effect.effect_key, values)
+	elseif slot_effect.kind == SLOT_KIND_FORMULA then
+		image_slot_count = image_slot_count + 1
+		if has_image(slot_effect.effect_key) then
+			has_any_image = true
+		end
+		items, guide_line = resolve_formula_slot(slot_effect.effect_key, values)
+	elseif slot_effect.kind == SLOT_KIND_NUMBER then
+		items, guide_line = resolve_number_slot(slot_effect.effect_key, values)
+	elseif slot_effect.kind == SLOT_KIND_REPEAT then
+		image_slot_count = image_slot_count + 1
+		if has_image(slot_effect.effect_key) then
+			has_any_image = true
+		end
+		items, guide_line = resolve_repeat_slot(slot_effect.effect_key, values)
+	else
+		guide_line = "この土台は「" .. slot_effect.kind .. "」のスロットに対応していません。"
 	end
-	local image_path, guide_line = resolve_slot(effect_key, values)
-	image_paths[slot_index] = image_path
-	placements[slot_index] = read_slot_placement(effect_key)
+	for item_index = 1, #items do
+		draw_items[#draw_items + 1] = items[item_index]
+	end
 	if guide_line ~= nil then
 		guide_lines[#guide_lines + 1] = guide_line
 	end
 end
 if #slot_effects == 0 then
-	guide_lines[#guide_lines + 1] = "フィルタ効果「連番スロット」を追加してください。"
-elseif not has_any_first_image then
-	guide_lines[#guide_lines + 1] = "「連番スロット」に、連番の先頭画像を設定してください。"
+	guide_lines[#guide_lines + 1] = "フィルタ効果「連番スロット」などを追加してください。"
+elseif image_slot_count > 0 and not has_any_image then
+	guide_lines[#guide_lines + 1] = "スロットに、連番の画像を設定してください。"
 end
 
 local show_guide = #guide_lines > 0 and should_show_guide()
-local slot_count = #slot_effects
-local object_count = slot_count
+local item_count = #draw_items
+local object_count = item_count
 if show_guide then
 	-- 案内は、最後の個別オブジェクトにする。
-	object_count = slot_count + 1
+	object_count = item_count + 1
 end
 if object_count == 0 then
 	-- 描くものが無い。何も表示しない。
@@ -235,23 +756,42 @@ if object_count == 0 then
 end
 
 obj.multiobject(object_count, function()
-	local slot_index = obj.index + 1
-	if slot_index > slot_count then
+	local item_index = obj.index + 1
+	if item_index > item_count then
 		load_guide_text(guide_lines)
 		return
 	end
-	local image_path = image_paths[slot_index]
-	local loaded = false
-	if image_path ~= nil then
-		loaded = obj.load("image", image_path)
+	local item = draw_items[item_index]
+	if item.kind == "text" then
+		obj.setfont(
+			item.font,
+			item.size,
+			item.decoration,
+			item.text_color,
+			item.edge_color,
+			item.bold,
+			item.italic,
+			item.char_spacing,
+			item.line_spacing
+		)
+		obj.load("text", item.text)
+	else
+		local loaded = obj.load("image", item.path)
+		if not loaded then
+			obj.alpha = 0
+			return
+		end
 	end
-	if not loaded then
-		obj.alpha = 0
-		return
+	-- 位置と大きさは、読み込んだ後に設定する（obj.load() で元に戻るため）。
+	local offset_x = 0
+	local offset_y = 0
+	if item.layout ~= nil then
+		-- 連番スロット（複製並べ）。並びの中の位置を、拡大率に合わせて広げる。
+		local center_x, center_y = repeat_offset(item.layout, item.repeat_index, obj.w, obj.h)
+		offset_x = center_x * item.scale
+		offset_y = center_y * item.scale
 	end
-	-- 位置と大きさは、画像を読み込んだ後に設定する（obj.load() で元に戻るため）。
-	local placement = placements[slot_index]
-	obj.ox = obj.ox + placement.x
-	obj.oy = obj.oy + placement.y
-	obj.zoom = obj.zoom * placement.scale
+	obj.ox = obj.ox + item.x + offset_x
+	obj.oy = obj.oy + item.y + offset_y
+	obj.zoom = obj.zoom * item.scale
 end)

@@ -1,6 +1,6 @@
 [project]
 name = "renban-matome"
-version = "0.0.0"
+version = "0.3.0"
 description = "AviUtl2 スクリプト「連番まとめ」"
 requires-python = ">=3.12"
 dependencies = []
@@ -18,7 +18,7 @@ dev = [
 package = false
 
 [tool.uv.sources]
-aviutl2-pyrrhulina = { url = "https://github.com/osakanamaki/aviutl2-pyrrhulina/releases/download/v0.1.2/aviutl2_pyrrhulina-0.1.2-py3-none-any.whl" }
+aviutl2-pyrrhulina = { url = "https://github.com/osakanamaki/aviutl2-pyrrhulina/releases/download/v0.2.1/aviutl2_pyrrhulina-0.2.1-py3-none-any.whl" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

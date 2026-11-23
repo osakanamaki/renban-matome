@@ -1,0 +1,10 @@
+--label:開発確認
+--information:テスト専用。土台が使う kernel32 の関数を、土台とは違う型で先に ffi で宣言する。何も描かない
+
+-- ほかの作者のスクリプトが、同じ関数を別の型（ここでは文字の型を char、uint8_t にしたもの）で宣言した状態を作る。
+-- ffi の宣言は、スクリプト同士で共有され、同じ名前は先の宣言が使われ続ける。
+local ffi = require("ffi")
+ffi.cdef([[
+	int MultiByteToWideChar(unsigned int code_page, unsigned long flags, const char *source, int source_length, char *destination, int destination_length);
+	unsigned long GetFileAttributesW(const uint8_t *file_name);
+]])

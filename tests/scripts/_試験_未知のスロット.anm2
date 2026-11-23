@@ -1,0 +1,5 @@
+--label:開発確認
+--information:テスト専用。土台が対応していない種類のスロット
+--value@slot_kind:スロットの種類,"未知"
+--hide@slot_kind
+return
