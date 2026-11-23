@@ -12,6 +12,7 @@ from PIL import Image, ImageChops
 
 BASE = "連番まとめ（値）"
 SLOT = "連番スロット"
+FORMULA_SLOT = "計算式スロット"
 # 土台が対応していない種類のスロット（案内の確認用）。
 UNKNOWN_SLOT = "_試験_未知のスロット"
 
@@ -66,6 +67,17 @@ def slot(
         "拡大率": f"{scale:.2f}",
     }
     return Effect(name, params)
+
+
+def formula_slot(image: Path | str, formula: str, *, outside: str = "表示しない", x: float = 0) -> Effect:
+    """計算式スロット。outside は範囲外の扱い。"""
+    params: dict[str, object] = {
+        "画像": image,
+        "計算式": formula,
+        "範囲外の扱い": outside,
+        "X": f"{x:.1f}",
+    }
+    return Effect(FORMULA_SLOT, params)
 
 
 def project(
@@ -234,6 +246,85 @@ def test_unset_slots_are_not_an_error(aviutl2: AviUtl2) -> None:
     image = aviutl2.render(project(base(2), slot(), slot(BAR), slot()), [0]).images[0]
 
     assert count_pixels(image, BAR_GREEN) == bar_pixels(2)
+
+
+# ---- 計算式スロット ----
+
+
+@pytest.mark.parametrize(
+    ("values", "formula", "expected"),
+    [
+        ((1,), "値1 - 1", 0),
+        ((3, 4), "値1 + 値2", 7),
+        ((10,), "値1 * 53 / 100", 5),
+        ((9,), "math.min(値1, 6)", 6),
+    ],
+    ids=["minus", "sum", "ratio", "math"],
+)
+def test_formula(aviutl2: AviUtl2, values: tuple[int, ...], formula: str, expected: int) -> None:
+    """RM-F30・RM-F31: 計算式の結果（小数点以下は切り捨て）を表示番号にする。"""
+    image = aviutl2.render(project(base(*values), formula_slot(BAR, formula)), [0]).images[0]
+
+    assert count_pixels(image, BAR_GREEN) == bar_pixels(expected)
+
+
+def test_formula_hides_below_zero(aviutl2: AviUtl2) -> None:
+    """値 0 のときは何も出さず、1 から選んだ画像を出す（"値1 - 1"）。"""
+    result = aviutl2.render(
+        project(base("0.00,1.00,直線移動,0"), formula_slot(BAR, "値1 - 1"), end=1), [0, 1]
+    )
+
+    assert result.images[0].getbbox() is None
+    assert count_pixels(result.images[1], BAR_GREEN) == bar_pixels(0)
+
+
+def test_formula_loop_counts_from_the_end(aviutl2: AviUtl2) -> None:
+    """RM-F14: ループのとき、-3 は後ろから3つ目の画像になる。"""
+    image = aviutl2.render(project(base(0), formula_slot(BAR, "値1 - 3", outside="ループ")), [0]).images[0]
+
+    assert count_pixels(image, BAR_GREEN) == bar_pixels(8)
+
+
+@pytest.mark.parametrize(
+    "formula",
+    [
+        "io.open",
+        "os.execute",
+        "require",
+        "loadstring",
+        "(function() return 1 end)()",
+        "math.random(1, 6)",
+        "string.rep",
+        "(値1 .. 値2):rep(3)",
+        '"1"',
+        "値9",
+        "値1 +",
+        "",
+    ],
+    ids=[
+        "io",
+        "os",
+        "require",
+        "loadstring",
+        "function",
+        "random",
+        "string",
+        "method",
+        "quote",
+        "v9",
+        "syntax",
+        "empty",
+    ],
+)
+def test_formula_rejected(aviutl2: AviUtl2, formula: str) -> None:
+    """RM-F32: 使えない名前や記号を含む計算式は計算せず、画像を出さずに案内を出す。"""
+    hidden = aviutl2.render(project(base(1, guide="表示しない"), formula_slot(BAR, formula)), [0])
+    guided = aviutl2.render(project(base(1, guide="常に"), formula_slot(BAR, formula)), [0])
+
+    assert hidden.images[0].getbbox() is None
+    assert guided.images[0].getbbox() is not None
+    assert count_pixels(guided.images[0], BAR_GREEN) == 0
+    assert not guided.log_lines("script exception")
 
 
 # ---- 位置と大きさ ----

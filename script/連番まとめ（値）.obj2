@@ -31,6 +31,11 @@
 --   表示番号が 0〜（枚数-1）の外のときは、「範囲外の扱い」に従う（表示しない／ループ／端で止める）。
 --   枚数は、指定が無ければ、選んだ画像から番号が続く限り数える。
 --
+-- 計算式スロット:
+--   連番スロットと同じだが、表示番号を利用者の計算式で決める（例: "値1 - 1"）。
+--   計算式は、値1〜値8 と数学の関数だけが見える環境で実行する。それ以外の名前（io など）や、
+--   文字列・表・繰り返しを書くための記号と予約語を含む計算式は、実行せずに案内を出す。
+--
 -- 描き方:
 --   表示物1つを1つの個別オブジェクトとして描き、スロットの X・Y・拡大率を反映する。
 --   案内を表示するときは、案内を最後の個別オブジェクトとして、土台の位置に描く。
@@ -41,6 +46,7 @@ local MAX_EFFECTS_BELOW = 64
 -- スロットが持つ、設定画面に出ない項目。値はスロットの種類。
 local SLOT_KIND_ITEM = "スロットの種類"
 local SLOT_KIND_SEQUENCE = "連番"
+local SLOT_KIND_FORMULA = "計算式"
 -- 枚数を数えるときに調べる番号の上限（これより多い連番は、ここまでとみなす）。
 local MAX_IMAGE_COUNT = 100000
 
@@ -51,6 +57,29 @@ local GUIDE_MODE_NEVER = 3
 local OUT_OF_RANGE_HIDE = "表示しない"
 local OUT_OF_RANGE_LOOP = "ループ"
 local OUT_OF_RANGE_CLAMP = "端で止める"
+
+-- 計算式で使える、数学の関数と定数（math.random は、描くたびに結果が変わるので除く）。
+local FORMULA_MATH_NAMES = {
+	abs = true,
+	ceil = true,
+	floor = true,
+	fmod = true,
+	max = true,
+	min = true,
+	sqrt = true,
+	pi = true,
+	huge = true,
+}
+-- 計算式に書ける予約語（条件の組み立てに使うものだけ。繰り返しや関数を作る予約語は書けない）。
+local FORMULA_KEYWORDS = {
+	["and"] = true,
+	["or"] = true,
+	["not"] = true,
+	["true"] = true,
+	["false"] = true,
+}
+-- 計算式に書けない記号。文字列（" '）、表や長い文字列（[ ] { }）、文の区切り（;）を作れないようにする。
+local FORMULA_FORBIDDEN_CHARACTERS = "[\"'%[%]{};]"
 
 local GUIDE_FONT = "Yu Gothic UI"
 local GUIDE_FONT_SIZE = 28
@@ -237,6 +266,75 @@ local function resolve_image_path(effect_key, display_number)
 	return path, nil
 end
 
+-- 計算式の中の名前が「値1」〜「値8」のどれかか。
+local function is_formula_value_name(name)
+	local number = tonumber(string.match(name, "^値(%d+)$"))
+	return number ~= nil and number >= 1 and number <= VALUE_COUNT
+end
+
+-- 計算式に、使ってよい名前だけが書かれているかを確かめる。
+-- 戻り値: 問題が無ければ nil、あれば案内に出す理由
+local function find_formula_problem(formula)
+	if string.find(formula, FORMULA_FORBIDDEN_CHARACTERS) then
+		return "使えない記号（\" ' [ ] { } ;）があります"
+	end
+	-- 名前（英字・_・日本語などで始まる並び）を、前から順に調べる。
+	for start, name in string.gmatch(formula, "()([%a_\128-\255][%w_\128-\255]*)") do
+		local before = ""
+		if start > 1 then
+			before = string.sub(formula, start - 1, start - 1)
+		end
+		local after_math = start > 5 and string.sub(formula, start - 5, start - 1) == "math."
+		if after_math then
+			if not FORMULA_MATH_NAMES[name] then
+				return "使えない関数です：math." .. name
+			end
+		elseif before == "." then
+			-- math. 以外の、表の中身は参照できない。
+			return "使えない名前です：" .. name
+		elseif string.find(before, "%d") then
+			-- 1e5 の e5 や 0x1F の x1F は、数の一部なので名前ではない。
+		elseif not (FORMULA_KEYWORDS[name] or name == "math" or is_formula_value_name(name)) then
+			return "使えない名前です：" .. name
+		end
+	end
+	return nil
+end
+
+-- 計算式を計算する。値は「値1」〜「値8」の名前で参照できる。
+-- 戻り値: 計算結果の数（計算できないときは nil）、案内の文（計算できたときは nil）
+local function evaluate_formula(formula, values)
+	if type(formula) ~= "string" or formula == "" then
+		return nil, "計算式が空です。"
+	end
+	local problem = find_formula_problem(formula)
+	if problem ~= nil then
+		return nil, "計算式を計算できません：" .. formula .. "\n（" .. problem .. "）"
+	end
+	-- 括弧で囲み、1つの式として読み込ませる。
+	local chunk = loadstring("return (" .. formula .. ")")
+	if chunk == nil then
+		return nil, "計算式を読めません：" .. formula
+	end
+	-- 計算式から見える名前を、値と数学の関数だけにする（io などは見えない）。
+	local formula_math = {}
+	for name in pairs(FORMULA_MATH_NAMES) do
+		formula_math[name] = math[name]
+	end
+	local environment = { math = formula_math }
+	for value_number = 1, VALUE_COUNT do
+		environment["値" .. value_number] = values[value_number]
+	end
+	setfenv(chunk, environment)
+	local succeeded, result = pcall(chunk)
+	local number = tonumber(result)
+	-- 数でない結果と、無限大・非数（NaN は自分自身と等しくない）は使えない。
+	if not succeeded or number == nil or number ~= number or number == math.huge or number == -math.huge then
+		return nil, "計算式の結果が数になりません：" .. formula
+	end
+	return number, nil
+end
+
 -- 連番スロット1つを読み、描くものを決める。
 -- 戻り値: 描くものの配列、案内の文（不備が無いときは nil）
 local function resolve_sequence_slot(effect_key, values)
@@ -251,6 +349,24 @@ local function resolve_sequence_slot(effect_key, values)
 	local path, guide_line = resolve_image_path(effect_key, values[value_number])
 	if path == nil then
 		return {}, guide_line
+	end
+	local placement = read_slot_placement(effect_key)
+	return { { kind = "image", path = path, x = placement.x, y = placement.y, scale = placement.scale } }, nil
+end
+
+-- 計算式スロット1つを読み、描くものを決める。
+-- 戻り値: 描くものの配列、案内の文（不備が無いときは nil）
+local function resolve_formula_slot(effect_key, values)
+	if not has_image(effect_key) then
+		return {}, nil
+	end
+	local result, guide_line = evaluate_formula(obj.getvalue(effect_key, "計算式"), values)
+	if result == nil then
+		return {}, guide_line
+	end
+	local path, image_guide_line = resolve_image_path(effect_key, math.floor(result))
+	if path == nil then
+		return {}, image_guide_line
 	end
 	local placement = read_slot_placement(effect_key)
 	return { { kind = "image", path = path, x = placement.x, y = placement.y, scale = placement.scale } }, nil
@@ -303,6 +419,12 @@ for slot_index = 1, #slot_effects do
 			has_any_image = true
 		end
 		items, guide_line = resolve_sequence_slot(slot_effect.effect_key, values)
+	elseif slot_effect.kind == SLOT_KIND_FORMULA then
+		image_slot_count = image_slot_count + 1
+		if has_image(slot_effect.effect_key) then
+			has_any_image = true
+		end
+		items, guide_line = resolve_formula_slot(slot_effect.effect_key, values)
 	else
 		guide_line = "この土台は「" .. slot_effect.kind .. "」のスロットに対応していません。"
 	end
@@ -314,9 +436,9 @@ for slot_index = 1, #slot_effects do
 	end
 end
 if #slot_effects == 0 then
-	guide_lines[#guide_lines + 1] = "フィルタ効果「連番スロット」を追加してください。"
+	guide_lines[#guide_lines + 1] = "フィルタ効果「連番スロット」などを追加してください。"
 elseif image_slot_count > 0 and not has_any_image then
-	guide_lines[#guide_lines + 1] = "「連番スロット」に、連番の画像を設定してください。"
+	guide_lines[#guide_lines + 1] = "スロットに、連番の画像を設定してください。"
 end
 
 local show_guide = #guide_lines > 0 and should_show_guide()
