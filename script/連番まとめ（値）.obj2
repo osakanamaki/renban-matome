@@ -225,6 +225,29 @@ local function value_number_of(source_name)
 	return number
 end
 
+-- スロットの項目を読む（読めないときは nil）。
+-- obj.getvalue() は、対象が無いとき値を返さない（nil も返さない）。結果を直接 tostring() や tonumber() に
+-- 渡すと「引数が無い」エラーで土台全体が止まるので、いったん変数に受けて nil にそろえる。
+local function read_item(effect_key, item_name)
+	local value = obj.getvalue(effect_key, item_name)
+	return value
+end
+
+-- スロットの項目を数として読む（読めないときは default）。
+local function read_number(effect_key, item_name, default)
+	local value = read_item(effect_key, item_name)
+	return tonumber(value) or default
+end
+
+-- スロットの項目を文字列として読む（読めないときは空の文字列）。
+local function read_text(effect_key, item_name)
+	local value = read_item(effect_key, item_name)
+	if value == nil then
+		return ""
+	end
+	return tostring(value)
+end
+
 -- このオブジェクトに付いているスロットを、上から順に集める。
 -- 戻り値: { effect_key = "効果名:n", kind = "連番" など } の配列
 local function find_slot_effects()
@@ -238,7 +261,7 @@ local function find_slot_effects()
 			local instance_number = instance_count_by_name[effect_name] or 0
 			instance_count_by_name[effect_name] = instance_number + 1
 			local effect_key = effect_name .. ":" .. instance_number
-			local kind = obj.getvalue(effect_key, SLOT_KIND_ITEM)
+			local kind = read_item(effect_key, SLOT_KIND_ITEM)
 			if kind ~= nil then
 				slot_effects[#slot_effects + 1] = { effect_key = effect_key, kind = tostring(kind) }
 			end
@@ -250,9 +273,9 @@ end
 -- スロット1つの、位置と大きさの設定を読む。
 -- 戻り値: { x = 土台からのずれ, y = 土台からのずれ, scale = 倍率（1.0 が等倍） }
 local function read_slot_placement(effect_key)
-	local position_x = tonumber(obj.getvalue(effect_key, "X")) or 0
-	local position_y = tonumber(obj.getvalue(effect_key, "Y")) or 0
-	local scale_percent = tonumber(obj.getvalue(effect_key, "拡大率")) or 100
+	local position_x = read_number(effect_key, "X", 0)
+	local position_y = read_number(effect_key, "Y", 0)
+	local scale_percent = read_number(effect_key, "拡大率", 100)
 	return { x = position_x, y = position_y, scale = scale_percent / 100 }
 end
 
@@ -279,7 +302,7 @@ end
 
 -- スロットに画像が設定されているか。
 local function has_image(effect_key)
-	local image_path = obj.getvalue(effect_key, "画像")
+	local image_path = read_item(effect_key, "画像")
 	return type(image_path) == "string" and image_path ~= ""
 end
 
@@ -287,7 +310,7 @@ end
 -- out_of_range は範囲外の扱い、image_count は枚数（0 以下なら自動で数える）。
 -- 戻り値: 画像のパス（表示しないときは nil）、案内の文（不備が無いときは nil）
 local function resolve_image_path(effect_key, display_number, out_of_range, image_count)
-	local image_path = obj.getvalue(effect_key, "画像")
+	local image_path = read_item(effect_key, "画像")
 	if split_image_path(image_path) == nil then
 		return nil, "連番として扱えないファイル名です：" .. file_name_of(image_path) .. "\n（拡張子の直前に番号が必要です）"
 	end
@@ -396,7 +419,7 @@ local function resolve_sequence_slot(effect_key, values)
 	if not has_image(effect_key) then
 		return {}, nil
 	end
-	local source_name = obj.getvalue(effect_key, "従う値")
+	local source_name = read_item(effect_key, "従う値")
 	local value_number = value_number_of(source_name)
 	if value_number == nil then
 		return {}, "この土台には「" .. tostring(source_name) .. "」がありません。"
@@ -404,8 +427,8 @@ local function resolve_sequence_slot(effect_key, values)
 	local path, guide_line = resolve_image_path(
 		effect_key,
 		values[value_number],
-		tostring(obj.getvalue(effect_key, "範囲外の扱い")),
-		to_integer(obj.getvalue(effect_key, "枚数"))
+		read_text(effect_key, "範囲外の扱い"),
+		to_integer(read_item(effect_key, "枚数"))
 	)
 	if path == nil then
 		return {}, guide_line
@@ -420,15 +443,15 @@ local function resolve_formula_slot(effect_key, values)
 	if not has_image(effect_key) then
 		return {}, nil
 	end
-	local result, guide_line = evaluate_formula(obj.getvalue(effect_key, "計算式"), values)
+	local result, guide_line = evaluate_formula(read_item(effect_key, "計算式"), values)
 	if result == nil then
 		return {}, guide_line
 	end
 	local path, image_guide_line = resolve_image_path(
 		effect_key,
 		math.floor(result),
-		tostring(obj.getvalue(effect_key, "範囲外の扱い")),
-		to_integer(obj.getvalue(effect_key, "枚数"))
+		read_text(effect_key, "範囲外の扱い"),
+		to_integer(read_item(effect_key, "枚数"))
 	)
 	if path == nil then
 		return {}, image_guide_line
@@ -444,8 +467,8 @@ local function resolve_repeat_slot(effect_key, values)
 	if not has_image(effect_key) then
 		return {}, nil
 	end
-	local image_value_name = obj.getvalue(effect_key, "画像を選ぶ値")
-	local count_value_name = obj.getvalue(effect_key, "数を決める値")
+	local image_value_name = read_item(effect_key, "画像を選ぶ値")
+	local count_value_name = read_item(effect_key, "数を決める値")
 	local image_value_number = value_number_of(image_value_name)
 	local count_value_number = value_number_of(count_value_name)
 	if image_value_number == nil then
@@ -463,15 +486,15 @@ local function resolve_repeat_slot(effect_key, values)
 		return {}, guide_line
 	end
 	local placement = read_slot_placement(effect_key)
-	local wrap_count = to_integer(obj.getvalue(effect_key, "折り返しの数"))
+	local wrap_count = to_integer(read_item(effect_key, "折り返しの数"))
 	if wrap_count <= 0 then
 		wrap_count = repeat_count
 	end
 	local layout = {
 		total = repeat_count,
 		per_row = wrap_count,
-		margin = tonumber(obj.getvalue(effect_key, "余白")) or 0,
-		align = tostring(obj.getvalue(effect_key, "並べ方")),
+		margin = read_number(effect_key, "余白", 0),
+		align = read_text(effect_key, "並べ方"),
 	}
 	local items = {}
 	for repeat_index = 0, repeat_count - 1 do
@@ -560,7 +583,7 @@ end
 -- テキスト数値スロット1つを読み、描くものを決める。
 -- 戻り値: 描くものの配列、案内の文（不備が無いときは nil）
 local function resolve_number_slot(effect_key, values)
-	local text = obj.getvalue(effect_key, "テキスト")
+	local text = read_item(effect_key, "テキスト")
 	if type(text) ~= "string" or text == "" then
 		return {}, nil
 	end
@@ -572,15 +595,15 @@ local function resolve_number_slot(effect_key, values)
 	local item = {
 		kind = "text",
 		text = filled,
-		font = tostring(obj.getvalue(effect_key, "フォント")),
-		size = tonumber(obj.getvalue(effect_key, "サイズ")) or 40,
-		decoration = TEXT_DECORATION_NUMBERS[tostring(obj.getvalue(effect_key, "文字装飾"))] or 0,
-		text_color = to_color(obj.getvalue(effect_key, "文字色"), 0xffffff),
-		edge_color = to_color(obj.getvalue(effect_key, "影・縁色"), 0x000000),
-		bold = is_checked(obj.getvalue(effect_key, "B")),
-		italic = is_checked(obj.getvalue(effect_key, "I")),
-		char_spacing = tonumber(obj.getvalue(effect_key, "字間")) or 0,
-		line_spacing = tonumber(obj.getvalue(effect_key, "行間")) or 0,
+		font = read_text(effect_key, "フォント"),
+		size = read_number(effect_key, "サイズ", 40),
+		decoration = TEXT_DECORATION_NUMBERS[read_text(effect_key, "文字装飾")] or 0,
+		text_color = to_color(read_item(effect_key, "文字色"), 0xffffff),
+		edge_color = to_color(read_item(effect_key, "影・縁色"), 0x000000),
+		bold = is_checked(read_item(effect_key, "B")),
+		italic = is_checked(read_item(effect_key, "I")),
+		char_spacing = read_number(effect_key, "字間", 0),
+		line_spacing = read_number(effect_key, "行間", 0),
 		x = placement.x,
 		y = placement.y,
 		scale = placement.scale,
