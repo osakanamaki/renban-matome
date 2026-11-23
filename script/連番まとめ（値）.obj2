@@ -1,49 +1,56 @@
 --label:連番まとめ
 --information:連番まとめ（値） v0.3.0
 --require:2011700
---group:値1,true
---track@value1:値1::値,-1,999,0,1
---string@export_name1:値1::公開名,
---group:値2,false
---track@value2:値2::値,-1,999,0,1
---string@export_name2:値2::公開名,
---group:値3,false
---track@value3:値3::値,-1,999,0,1
---string@export_name3:値3::公開名,
---group:値4,false
---track@value4:値4::値,-1,999,0,1
---string@export_name4:値4::公開名,
---group
---select@guide_mode:案内の表示=1,編集中だけ=1,常に=2,表示しない=3
+--track@value1:値1,-1,999,0,1
+--track@value2:値2,-1,999,0,1
+--track@value3:値3,-1,999,0,1
+--track@value4:値4,-1,999,0,1
+--track@value5:値5,-1,999,0,1
+--track@value6:値6,-1,999,0,1
+--track@value7:値7,-1,999,0,1
+--track@value8:値8,-1,999,0,1
+--select@guide_mode:案内の表示=1,選択中だけ=1,常に=2,表示しない=3
 
 -- 連番まとめ（値）
 --
--- 連番画像をまとめて切り替える「土台」。HP・MP のような状態表示に向けて、独立した値を4つ持つ。
--- 表示する連番画像は、このオブジェクトに付けたフィルタ効果「連番スロット」で指定する。
+-- 連番画像などをまとめて切り替える「土台」。HP・MP のような状態表示に向けて、独立した値を8つ持つ。
+-- 表示するものは、このオブジェクトに付けたフィルタ効果「スロット」で指定する。
 --
 -- 役割の分担:
---   土台（このスクリプト）: 値を持ち、公開し、連番スロットの画像をまとめて描く。
---   連番スロット: 1つの連番画像と、従う値・オフセット・上限を持つだけ（何もしない）。
+--   土台（このスクリプト）: 値を持ち、付いているスロットの内容をまとめて描く。
+--   スロット: 1つの表示物の設定を持つだけ（スロット自身は何もしない）。
 --
--- 表示番号 = 従う値 + オフセット（0 が先頭画像）
--- 表示する画像 = 先頭画像のファイル名の、拡張子の直前の数字に、表示番号を足した番号の画像
--- 表示番号が負、上限を超える、または画像が無いときは、そのスロットは何も表示しない（意図的な非表示）。
+-- スロットの見分け方:
+--   スロットは、設定画面に出ない「スロットの種類」の項目を持つ（例: "連番"）。
+--   土台は、付いているフィルタ効果のこの項目を読んで、スロットかどうかと種類を見分ける。
+--   効果名では見分けないので、利用者がファイル名を変えても動く。
+--
+-- 連番スロット:
+--   表示番号 = 従う値（小数点以下は切り捨て）。0 のとき、選んだ画像を表示する。
+--   表示する画像 = 選んだ画像のファイル名の、拡張子の直前の数字に、表示番号を足した番号の画像
+--   表示番号が 0〜（枚数-1）の外のときは、「範囲外の扱い」に従う（表示しない／ループ／端で止める）。
+--   枚数は、指定が無ければ、選んだ画像から番号が続く限り数える。
 --
 -- 描き方:
---   連番スロット1つを1つの個別オブジェクトとして描き、スロットの X・Y・拡大率を反映する。
+--   表示物1つを1つの個別オブジェクトとして描き、スロットの X・Y・拡大率を反映する。
 --   案内を表示するときは、案内を最後の個別オブジェクトとして、土台の位置に描く。
---   個別オブジェクトの番号は利用者との取り決めにしない（要件 RM-F18 は取り下げ）。
 
-local VALUE_COUNT = 4
+local VALUE_COUNT = 8
 -- 自分より下のフィルタ効果を何個まで調べるか。範囲外も「スクリプト以外」も空のテキストになり区別できないため、上限を決める。
 local MAX_EFFECTS_BELOW = 64
--- 連番スロットだけが持つ項目。フィルタ効果が連番スロットかどうかの判定に使う。
--- （利用者がファイル名を変えても動くよう、効果名では判定しない）
-local SLOT_MARKER_ITEM = "従う値"
+-- スロットが持つ、設定画面に出ない項目。値はスロットの種類。
+local SLOT_KIND_ITEM = "スロットの種類"
+local SLOT_KIND_SEQUENCE = "連番"
+-- 枚数を数えるときに調べる番号の上限（これより多い連番は、ここまでとみなす）。
+local MAX_IMAGE_COUNT = 100000
 
-local GUIDE_MODE_EDITING_ONLY = 1
+local GUIDE_MODE_SELECTED_ONLY = 1
 local GUIDE_MODE_ALWAYS = 2
 local GUIDE_MODE_NEVER = 3
+
+local OUT_OF_RANGE_HIDE = "表示しない"
+local OUT_OF_RANGE_LOOP = "ループ"
+local OUT_OF_RANGE_CLAMP = "端で止める"
 
 local GUIDE_FONT = "Yu Gothic UI"
 local GUIDE_FONT_SIZE = 28
@@ -59,28 +66,60 @@ local function to_integer(value)
 	return math.floor(number)
 end
 
--- チェックボックスの値は、読み方によって 0/1、"0"/"1"、true/false のどれかで返る。
-local function is_checked(value)
-	return value == true or value == 1 or value == "1"
-end
-
--- 先頭画像のパスを、番号の前・番号・拡張子に分ける。連番の規則に合わないときは nil を返す。
+-- 選んだ画像のパスを、番号の前・番号・拡張子に分ける。連番の規則に合わないときは nil を返す。
 -- 例: "C:\a\bar_000.png" → "C:\a\bar_", "000", ".png"
-local function split_first_image_path(first_image_path)
-	local prefix, digits, extension = string.match(first_image_path, "^(.-)(%d+)(%.[^%.\\/]+)$")
+local function split_image_path(image_path)
+	local prefix, digits, extension = string.match(image_path, "^(.-)(%d+)(%.[^%.\\/]+)$")
 	if digits == nil then
 		return nil
 	end
 	return prefix, digits, extension
 end
 
--- 先頭画像のパスと表示番号から、表示する画像のパスを作る。
+-- 選んだ画像のパスと表示番号から、表示する画像のパスを作る。
 -- 例: "C:\a\bar_000.png" と 7 → "C:\a\bar_007.png"
-local function build_image_path(first_image_path, display_number)
-	local prefix, digits, extension = split_first_image_path(first_image_path)
+local function build_image_path(image_path, display_number)
+	local prefix, digits, extension = split_image_path(image_path)
 	local image_number = tonumber(digits) + display_number
 	local number_text = string.format("%0" .. string.len(digits) .. "d", image_number)
 	return prefix .. number_text .. extension
+end
+
+-- ファイルがあるかを確かめる。obj.load() と違い、無くても AviUtl2 のログにエラーが出ない。
+local function file_exists(path)
+	local file = io.open(path, "rb")
+	if file == nil then
+		return false
+	end
+	file:close()
+	return true
+end
+
+-- 選んだ画像から、番号が続く限り数えた枚数を返す（選んだ画像自体が無ければ 0）。
+-- 番号の抜けは無いものとして、存在する範囲を倍々に広げてから、二分探索で境目を探す。
+local function count_images(image_path)
+	if not file_exists(build_image_path(image_path, 0)) then
+		return 0
+	end
+	-- last_found: 存在を確かめた最後の表示番号。first_missing: 存在しないと確かめた最初の表示番号。
+	local last_found = 0
+	local first_missing = 1
+	while first_missing < MAX_IMAGE_COUNT and file_exists(build_image_path(image_path, first_missing)) do
+		last_found = first_missing
+		first_missing = first_missing * 2
+	end
+	if first_missing >= MAX_IMAGE_COUNT then
+		return MAX_IMAGE_COUNT
+	end
+	while first_missing - last_found > 1 do
+		local middle = math.floor((last_found + first_missing) / 2)
+		if file_exists(build_image_path(image_path, middle)) then
+			last_found = middle
+		else
+			first_missing = middle
+		end
+	end
+	return last_found + 1
 end
 
 -- パスからファイル名だけを取り出す（案内の表示用）。
@@ -92,7 +131,7 @@ local function file_name_of(path)
 	return name
 end
 
--- 「値1」〜「値4」の名前から、値の番号を返す。読めないときは nil。
+-- 「値1」〜「値8」の名前から、値の番号を返す。読めないときは nil。
 local function value_number_of(source_name)
 	local number = tonumber(string.match(tostring(source_name), "(%d+)$"))
 	if number == nil or number < 1 or number > VALUE_COUNT then
@@ -101,8 +140,8 @@ local function value_number_of(source_name)
 	return number
 end
 
--- このオブジェクトに付いている連番スロットを、上から順に集める。
--- 戻り値: { effect_key = "効果名:n", ... } の配列
+-- このオブジェクトに付いているスロットを、上から順に集める。
+-- 戻り値: { effect_key = "効果名:n", kind = "連番" など } の配列
 local function find_slot_effects()
 	local slot_effects = {}
 	-- 同じ効果名の、何番目のインスタンスか（obj.getvalue の ":n" に使う）。
@@ -114,16 +153,16 @@ local function find_slot_effects()
 			local instance_number = instance_count_by_name[effect_name] or 0
 			instance_count_by_name[effect_name] = instance_number + 1
 			local effect_key = effect_name .. ":" .. instance_number
-			local marker = obj.getvalue(effect_key, SLOT_MARKER_ITEM)
-			if marker ~= nil then
-				slot_effects[#slot_effects + 1] = { effect_key = effect_key }
+			local kind = obj.getvalue(effect_key, SLOT_KIND_ITEM)
+			if kind ~= nil then
+				slot_effects[#slot_effects + 1] = { effect_key = effect_key, kind = tostring(kind) }
 			end
 		end
 	end
 	return slot_effects
 end
 
--- 連番スロット1つの、位置と大きさの設定を読む。
+-- スロット1つの、位置と大きさの設定を読む。
 -- 戻り値: { x = 土台からのずれ, y = 土台からのずれ, scale = 倍率（1.0 が等倍） }
 local function read_slot_placement(effect_key)
 	local position_x = tonumber(obj.getvalue(effect_key, "X")) or 0
@@ -132,36 +171,89 @@ local function read_slot_placement(effect_key)
 	return { x = position_x, y = position_y, scale = scale_percent / 100 }
 end
 
--- 連番スロット1つの設定を読み、表示する画像のパスを決める。
+-- 表示番号を、範囲外の扱いに従って、0〜（枚数-1）に収める。表示しないときは nil を返す。
+local function apply_out_of_range(display_number, image_count, out_of_range)
+	if display_number >= 0 and display_number < image_count then
+		return display_number
+	end
+	if image_count <= 0 then
+		return nil
+	end
+	if out_of_range == OUT_OF_RANGE_LOOP then
+		-- Lua の % は、割る数が正なら 0 以上を返す（-1 % 10 = 9）。負の番号は後ろから数えることになる。
+		return display_number % image_count
+	end
+	if out_of_range == OUT_OF_RANGE_CLAMP then
+		if display_number < 0 then
+			return 0
+		end
+		return image_count - 1
+	end
+	return nil
+end
+
+-- スロットに画像が設定されているか。
+local function has_image(effect_key)
+	local image_path = obj.getvalue(effect_key, "画像")
+	return type(image_path) == "string" and image_path ~= ""
+end
+
+-- 画像を使うスロットの、表示する画像のパスを決める。
 -- 戻り値: 画像のパス（表示しないときは nil）、案内の文（不備が無いときは nil）
-local function resolve_slot(effect_key, values)
-	local first_image_path = obj.getvalue(effect_key, "画像")
-	if type(first_image_path) ~= "string" or first_image_path == "" then
+local function resolve_image_path(effect_key, display_number)
+	local image_path = obj.getvalue(effect_key, "画像")
+	if split_image_path(image_path) == nil then
+		return nil, "連番として扱えないファイル名です：" .. file_name_of(image_path) .. "\n（拡張子の直前に番号が必要です）"
+	end
+	if not file_exists(image_path) then
+		return nil, "選んだ画像が見つかりません：" .. file_name_of(image_path)
+	end
+	local out_of_range = tostring(obj.getvalue(effect_key, "範囲外の扱い"))
+	local image_count = to_integer(obj.getvalue(effect_key, "枚数"))
+	if image_count <= 0 then
+		-- 枚数の指定が無い。
+		if out_of_range == OUT_OF_RANGE_HIDE then
+			-- 表示しないときは、枚数を数えなくても、表示する画像があるかだけ確かめればよい。
+			if display_number < 0 then
+				return nil, nil
+			end
+			local path = build_image_path(image_path, display_number)
+			if file_exists(path) then
+				return path, nil
+			end
+			return nil, nil
+		end
+		image_count = count_images(image_path)
+	end
+	local number = apply_out_of_range(display_number, image_count, out_of_range)
+	if number == nil then
 		return nil, nil
 	end
-	if split_first_image_path(first_image_path) == nil then
-		return nil,
-			"連番として扱えないファイル名です：" .. file_name_of(first_image_path) .. "\n（拡張子の直前に番号が必要です）"
+	local path = build_image_path(image_path, number)
+	if not file_exists(path) then
+		-- 枚数の指定が、実際の枚数より多い。
+		return nil, nil
 	end
+	return path, nil
+end
 
+-- 連番スロット1つを読み、描くものを決める。
+-- 戻り値: 描くものの配列、案内の文（不備が無いときは nil）
+local function resolve_sequence_slot(effect_key, values)
+	if not has_image(effect_key) then
+		return {}, nil
+	end
 	local source_name = obj.getvalue(effect_key, "従う値")
 	local value_number = value_number_of(source_name)
 	if value_number == nil then
-		return nil, "この土台には「" .. tostring(source_name) .. "」がありません。"
+		return {}, "この土台には「" .. tostring(source_name) .. "」がありません。"
 	end
-
-	local offset = to_integer(obj.getvalue(effect_key, "オフセット"))
-	local display_number = values[value_number] + offset
-	if display_number < 0 then
-		return nil, nil
+	local path, guide_line = resolve_image_path(effect_key, values[value_number])
+	if path == nil then
+		return {}, guide_line
 	end
-	if is_checked(obj.getvalue(effect_key, "上限を使う")) then
-		local limit = to_integer(obj.getvalue(effect_key, "上限"))
-		if display_number > limit then
-			return nil, nil
-		end
-	end
-	return build_image_path(first_image_path, display_number), nil
+	local placement = read_slot_placement(effect_key)
+	return { { kind = "image", path = path, x = placement.x, y = placement.y, scale = placement.scale } }, nil
 end
 
 local function should_show_guide()
@@ -172,7 +264,7 @@ local function should_show_guide()
 	if mode == GUIDE_MODE_NEVER then
 		return false
 	end
-	-- 編集中だけ。動画の出力中は obj.getoption("gui") が false になる。
+	-- 選択中だけ。obj.getoption("gui") は、土台を選択してプレビューしているときだけ true になる。
 	return obj.getoption("gui") == true
 end
 
@@ -182,52 +274,57 @@ local function load_guide_text(guide_lines)
 	obj.load("text", "[連番まとめ]\n" .. table.concat(guide_lines, "\n"))
 end
 
--- 値を集め、公開名があれば公開する（テキストなどから global.名前 で参照できる）。
+-- 値を集める（小数点以下は切り捨て）。
+-- 設定項目はスクリプトのローカル変数になり、名前で引けないため、明示して並べる。
 local values = {
 	to_integer(value1),
 	to_integer(value2),
 	to_integer(value3),
 	to_integer(value4),
+	to_integer(value5),
+	to_integer(value6),
+	to_integer(value7),
+	to_integer(value8),
 }
-local export_names = { export_name1, export_name2, export_name3, export_name4 }
-for value_number = 1, VALUE_COUNT do
-	local export_name = export_names[value_number]
-	if type(export_name) == "string" and export_name ~= "" then
-		global[export_name] = values[value_number]
-	end
-end
 
--- 連番スロットごとに、表示する画像と、案内の文を決める。
+-- スロットごとに、描くものと、案内の文を決める。
 local slot_effects = find_slot_effects()
-local image_paths = {}
-local placements = {}
+local draw_items = {}
 local guide_lines = {}
-local has_any_first_image = false
+local image_slot_count = 0
+local has_any_image = false
 for slot_index = 1, #slot_effects do
-	local effect_key = slot_effects[slot_index].effect_key
-	local first_image_path = obj.getvalue(effect_key, "画像")
-	if type(first_image_path) == "string" and first_image_path ~= "" then
-		has_any_first_image = true
+	local slot_effect = slot_effects[slot_index]
+	local items = {}
+	local guide_line = nil
+	if slot_effect.kind == SLOT_KIND_SEQUENCE then
+		image_slot_count = image_slot_count + 1
+		if has_image(slot_effect.effect_key) then
+			has_any_image = true
+		end
+		items, guide_line = resolve_sequence_slot(slot_effect.effect_key, values)
+	else
+		guide_line = "この土台は「" .. slot_effect.kind .. "」のスロットに対応していません。"
 	end
-	local image_path, guide_line = resolve_slot(effect_key, values)
-	image_paths[slot_index] = image_path
-	placements[slot_index] = read_slot_placement(effect_key)
+	for item_index = 1, #items do
+		draw_items[#draw_items + 1] = items[item_index]
+	end
 	if guide_line ~= nil then
 		guide_lines[#guide_lines + 1] = guide_line
 	end
 end
 if #slot_effects == 0 then
 	guide_lines[#guide_lines + 1] = "フィルタ効果「連番スロット」を追加してください。"
-elseif not has_any_first_image then
-	guide_lines[#guide_lines + 1] = "「連番スロット」に、連番の先頭画像を設定してください。"
+elseif image_slot_count > 0 and not has_any_image then
+	guide_lines[#guide_lines + 1] = "「連番スロット」に、連番の画像を設定してください。"
 end
 
 local show_guide = #guide_lines > 0 and should_show_guide()
-local slot_count = #slot_effects
-local object_count = slot_count
+local item_count = #draw_items
+local object_count = item_count
 if show_guide then
 	-- 案内は、最後の個別オブジェクトにする。
-	object_count = slot_count + 1
+	object_count = item_count + 1
 end
 if object_count == 0 then
 	-- 描くものが無い。何も表示しない。
@@ -235,23 +332,19 @@ if object_count == 0 then
 end
 
 obj.multiobject(object_count, function()
-	local slot_index = obj.index + 1
-	if slot_index > slot_count then
+	local item_index = obj.index + 1
+	if item_index > item_count then
 		load_guide_text(guide_lines)
 		return
 	end
-	local image_path = image_paths[slot_index]
-	local loaded = false
-	if image_path ~= nil then
-		loaded = obj.load("image", image_path)
-	end
+	local item = draw_items[item_index]
+	local loaded = obj.load("image", item.path)
 	if not loaded then
 		obj.alpha = 0
 		return
 	end
-	-- 位置と大きさは、画像を読み込んだ後に設定する（obj.load() で元に戻るため）。
-	local placement = placements[slot_index]
-	obj.ox = obj.ox + placement.x
-	obj.oy = obj.oy + placement.y
-	obj.zoom = obj.zoom * placement.scale
+	-- 位置と大きさは、読み込んだ後に設定する（obj.load() で元に戻るため）。
+	obj.ox = obj.ox + item.x
+	obj.oy = obj.oy + item.y
+	obj.zoom = obj.zoom * item.scale
 end)
