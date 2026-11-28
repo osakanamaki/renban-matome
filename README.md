@@ -1,10 +1,17 @@
 # 連番まとめ（AviUtl2 スクリプト）
 
-> 開発中です。
+[![最新リリース](https://img.shields.io/github/v/release/osakanamaki/renban-matome?label=release)](https://github.com/osakanamaki/renban-matome/releases/latest)
+[![検証済みのAviUtl2](https://img.shields.io/badge/AviUtl2-2.1.17-blue)](https://spring-fragrance.mints.ne.jp/aviutl/)
+[![🐠ピルリナでテスト](https://img.shields.io/badge/tested%20with-%F0%9F%90%A0%E3%83%94%E3%83%AB%E3%83%AA%E3%83%8A-blue)](https://github.com/osakanamaki/aviutl2-pyrrhulina)
 
 AviUtl2 用のスクリプトです。
 
 - **連番まとめ**: 複数の連番画像を1つのオブジェクトにまとめ、値で一括して切り替えます。
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/usage-dark.svg">
+  <img src="docs/images/usage-light.svg" alt="使い方の図: 1. タイムラインの「オブジェクト追加」→「連番まとめ」→「連番まとめ（値）」を置いて土台にする。2. 土台のオブジェクト設定の [+] →「連番まとめ」から、連番スロットやテキスト数値スロットなどを使いたい数だけ付ける。3. 土台の値1〜値8を動かすと、その値に従うスロットが一緒に切り替わる。" width="880">
+</picture>
 
 要件は [requirements.md](requirements.md) を参照してください。
 
