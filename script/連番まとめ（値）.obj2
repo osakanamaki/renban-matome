@@ -45,6 +45,7 @@
 --
 -- テキスト数値スロット:
 --   テキストの中の {計算式} を計算結果に置き換えて、文字として描く（例: "HP {値1}"）。
+--   計算結果は、「小数の扱い」で丸め、「桁数」に満たない整数部分の前を 0 で埋めて書く。
 --
 -- 連番スロット（複製並べ）:
 --   画像を選ぶ値で画像を決め（連番スロットと同じ規則。範囲外は表示しない）、数を決める値の数だけ並べる。
@@ -689,23 +690,64 @@ end
 -- 全桁を正確に表せる整数の上限（Lua の数は倍精度の浮動小数点数で、仮数は 53 bit）。
 local EXACT_INTEGER_LIMIT = 2 ^ 53
 
--- 計算結果を、表示する文字にする。整数なら小数点を付けない。
-local function format_number(number)
-	if number == 0 then
-		-- -0 を "-0" と書かないように、0 として書く。
-		return "0"
+-- テキスト数値スロットの「小数の扱い」の選択肢と、小数点以下に書く桁数。
+local DECIMAL_MODE_ROUND = "四捨五入"
+local DECIMAL_MODE_TRUNCATE = "切り捨て"
+local DECIMAL_PLACES_BY_MODE = {
+	[DECIMAL_MODE_ROUND] = 0,
+	[DECIMAL_MODE_TRUNCATE] = 0,
+	["小数第1位まで"] = 1,
+	["小数第2位まで"] = 2,
+}
+-- テキスト数値スロットの「桁数」の上限。
+local MAX_DIGITS = 10
+
+-- 計算結果を、表示する文字にする。
+-- decimal_mode は小数の扱い（四捨五入・切り捨ては整数に、小数第1位・第2位までは四捨五入してその桁まで書く）。
+-- digits は桁数（整数部分がこの桁数に満たないとき、前を 0 で埋める。0 なら埋めない）。
+-- 例: 33.33 を「小数第1位まで」で "33.3"、5 を「小数第1位まで」で "5.0"、-7 を桁数 3 で "-007"
+local function format_number(number, decimal_mode, digits)
+	local decimal_places = DECIMAL_PLACES_BY_MODE[decimal_mode] or 0
+	-- 符号を外した大きさを、小数点以下の桁数の分だけ大きくして、整数に丸める。
+	-- 四捨五入は 0 から遠いほうへ（-2.5 は -3）、切り捨ては 0 に近いほうへ（-16.7 は -16）丸める。
+	local scaled = math.abs(number) * 10 ^ decimal_places
+	if decimal_mode == DECIMAL_MODE_TRUNCATE then
+		scaled = math.floor(scaled)
+	else
+		scaled = math.floor(scaled + 0.5)
 	end
-	if number == math.floor(number) and math.abs(number) <= EXACT_INTEGER_LIMIT then
-		-- %d は 64bit 整数に収まらない数を正しく書けないため、小数点以下 0 桁の %.0f で書く。
-		return string.format("%.0f", number)
+	if scaled > EXACT_INTEGER_LIMIT then
+		-- 全桁を正確に表せない大きな数は、Lua の書き方（有効数字 14 桁、必要なら指数の形）にする。
+		return tostring(number)
 	end
-	-- 小数と、全桁を正確に表せない大きな整数は、Lua の書き方（有効数字 14 桁、必要なら指数の形）にする。
-	return tostring(number)
+	-- %d は 64bit 整数に収まらない数を正しく書けないため、小数点以下 0 桁の %.0f で書く。
+	local scaled_text = string.format("%.0f", scaled)
+	local integer_text = scaled_text
+	local fraction_text = ""
+	if decimal_places > 0 then
+		-- 0.05 のように 1 より小さい数でも整数部分の 0 が残るよう、足りない桁を前に 0 で足してから分ける。
+		if string.len(scaled_text) <= decimal_places then
+			scaled_text = string.rep("0", decimal_places + 1 - string.len(scaled_text)) .. scaled_text
+		end
+		local integer_length = string.len(scaled_text) - decimal_places
+		integer_text = string.sub(scaled_text, 1, integer_length)
+		fraction_text = "." .. string.sub(scaled_text, integer_length + 1)
+	end
+	if string.len(integer_text) < digits then
+		integer_text = string.rep("0", digits - string.len(integer_text)) .. integer_text
+	end
+	-- 丸めて 0 になった数（-0.4 や -0）は、"-0" と書かないように符号を付けない。
+	local sign = ""
+	if number < 0 and scaled > 0 then
+		sign = "-"
+	end
+	return sign .. integer_text .. fraction_text
 end
 
 -- テキストの中の {計算式} を、計算結果に置き換える。
+-- number_style は計算結果の書き方 { decimal_mode = 小数の扱い, digits = 桁数 }。
 -- 戻り値: 置き換えたテキスト（計算できない部分があれば nil）、案内の文（問題が無ければ nil）
-local function fill_text(text, values)
+local function fill_text(text, values, number_style)
 	local guide_line = nil
 	local filled = string.gsub(text, "{(.-)}", function(formula)
 		local result, formula_guide_line = evaluate_formula(formula, values)
@@ -713,7 +755,7 @@ local function fill_text(text, values)
 			guide_line = guide_line or formula_guide_line
 			return ""
 		end
-		return format_number(result)
+		return format_number(result, number_style.decimal_mode, number_style.digits)
 	end)
 	if guide_line ~= nil then
 		return nil, guide_line
@@ -728,7 +770,14 @@ local function resolve_number_slot(effect_key, values)
 	if type(text) ~= "string" or text == "" then
 		return {}, nil
 	end
-	local filled, guide_line = fill_text(text, values)
+	local digits = to_integer(read_item(effect_key, "桁数"))
+	if digits < 0 then
+		digits = 0
+	elseif digits > MAX_DIGITS then
+		digits = MAX_DIGITS
+	end
+	local number_style = { decimal_mode = read_text(effect_key, "小数の扱い"), digits = digits }
+	local filled, guide_line = fill_text(text, values, number_style)
 	if filled == nil then
 		return {}, guide_line
 	end

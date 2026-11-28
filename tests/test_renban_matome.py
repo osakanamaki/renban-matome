@@ -111,11 +111,22 @@ def still_slot(image: Path | str = "", *, x: float = 0, y: float = 0, scale: flo
 
 
 def number_slot(
-    text: str, *, text_color: str = "ffffff", decoration: str = "縁取り文字", x: float = 0
+    text: str,
+    *,
+    decimal: str = "四捨五入",
+    digits: int = 0,
+    text_color: str = "ffffff",
+    decoration: str = "縁取り文字",
+    x: float = 0,
 ) -> Effect:
-    """テキスト数値スロット。text_color は「テキスト」と同じ 16 進数の書き方。"""
+    """テキスト数値スロット。decimal は小数の扱い、digits は桁数（0 は「しない」）。
+
+    text_color は「テキスト」と同じ 16 進数の書き方。
+    """
     params: dict[str, object] = {
         "テキスト": text,
+        "小数の扱い": decimal,
+        "桁数": str(digits),
         "文字色": text_color,
         "文字装飾": decoration,
         "X": f"{x:.1f}",
@@ -615,21 +626,67 @@ def test_number_rejected_formula(aviutl2: AviUtl2) -> None:
 
 
 @pytest.mark.parametrize(
-    ("value", "formula", "expected_text"),
+    ("value", "formula", "decimal", "digits", "expected_text"),
     [
-        (0, "{値1 * -1}", "0"),
-        (1, "{値1 * 2^53}", "9007199254740992"),
-        (1, "{値1 * 1e20}", "1e+20"),
-        (1, "{値1 / 4}", "0.25"),
+        (0, "{値1 * -1}", "四捨五入", 0, "0"),
+        (1, "{値1 * 2^53}", "四捨五入", 0, "9007199254740992"),
+        (1, "{値1 * 1e20}", "四捨五入", 0, "1e+20"),
+        (1, "{値1 * 1e20}", "小数第2位まで", 10, "1e+20"),
+        (100, "{値1 / 3}", "四捨五入", 0, "33"),
+        (100, "{値1 / 3}", "小数第1位まで", 0, "33.3"),
+        (100, "{値1 / 6}", "切り捨て", 0, "16"),
+        (100, "{値1 / 6}", "四捨五入", 0, "17"),
+        (100, "{値1 / 6}", "小数第2位まで", 0, "16.67"),
+        (100, "{値1 / 20}", "四捨五入", 3, "005"),
+        (100, "{値1 / 20}", "小数第1位まで", 0, "5.0"),
+        (100, "{値1 / 400}", "小数第1位まで", 0, "0.3"),
+        (100, "{値1 / 1000}", "小数第2位まで", 0, "0.10"),
+        (100, "{値1 / 8}", "小数第1位まで", 3, "012.5"),
+        (100, "{値1 * -7 / 100}", "四捨五入", 3, "-007"),
+        (100, "{値1 * -1 / 6}", "切り捨て", 0, "-16"),
+        (100, "{値1 * -1 / 6}", "四捨五入", 0, "-17"),
+        (100, "{値1 * -1 / 40}", "四捨五入", 0, "-3"),
+        (100, "{値1 * -1 / 250}", "四捨五入", 0, "0"),
+        (100, "{値1}", "四捨五入", 10, "0000000100"),
+        (100, "{値1 * 100000000}", "四捨五入", 10, "10000000000"),
+        (100, "HP {値1} / {値1 / 4}", "四捨五入", 3, "HP 100 / 025"),
     ],
-    ids=["minus_zero", "exact_limit", "huge", "fraction"],
+    ids=[
+        "minus_zero",
+        "exact_limit",
+        "huge",
+        "huge_styled",
+        "round",
+        "one_place",
+        "truncate",
+        "round_up",
+        "two_places",
+        "pad",
+        "one_place_zero",
+        "one_place_half",
+        "two_places_zero",
+        "pad_fraction",
+        "pad_negative",
+        "truncate_negative",
+        "round_negative",
+        "round_negative_half",
+        "round_to_zero",
+        "pad_max",
+        "longer_than_digits",
+        "every_formula",
+    ],
 )
-def test_number_format(aviutl2: AviUtl2, value: int, formula: str, expected_text: str) -> None:
-    """計算結果は、整数なら全桁で、全桁を正確に表せない大きな数や小数なら Lua の書き方で表示される。
+def test_number_format(
+    aviutl2: AviUtl2, value: int, formula: str, decimal: str, digits: int, expected_text: str
+) -> None:
+    """RM-F43・RM-F44: 計算結果は、小数の扱いで丸め、桁数に満たない整数部分の前を 0 で埋めて表示される。
 
+    全桁を正確に表せない大きな数は、Lua の書き方で表示される。
     計算式を書いたテキストと、期待する文字をそのまま書いたテキストの描画を比べる。
     """
-    actual = aviutl2.render(project(base(value), number_slot(formula)), [0]).images[0]
+    actual = aviutl2.render(
+        project(base(value), number_slot(formula, decimal=decimal, digits=digits)), [0]
+    ).images[0]
     expected = aviutl2.render(project(base(value), number_slot(expected_text)), [0]).images[0]
 
     assert actual.getbbox() is not None
