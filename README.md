@@ -37,6 +37,7 @@ AviUtl2 用のスクリプトです。
 | [連番まとめ（値）](https://github.com/osakanamaki/renban-matome/wiki/連番まとめ（値）) | 土台。「値」を8つ持ち、付いたスロットをまとめて描く |
 | [連番スロット](https://github.com/osakanamaki/renban-matome/wiki/連番スロット) | 値の番号の連番画像を表示する |
 | [連番スロット（ゲージ）](https://github.com/osakanamaki/renban-matome/wiki/連番スロット（ゲージ）) | 値を「ゲージの上限」に対する割合で、HP バーなどの連番画像に割り振る |
+| [静止画スロット](https://github.com/osakanamaki/renban-matome/wiki/静止画スロット) | 1枚の画像（アイコンや枠など）を、値に左右されず常に表示する |
 | [連番スロット（計算式）](https://github.com/osakanamaki/renban-matome/wiki/連番スロット（計算式）) | 表示する番号を計算式で決める |
 | [テキスト数値スロット](https://github.com/osakanamaki/renban-matome/wiki/テキスト数値スロット) | 値を文字で表示する |
 | [連番スロット（複製並べ）](https://github.com/osakanamaki/renban-matome/wiki/連番スロット（複製並べ）) | 1つの画像を、値で決まる数だけ並べる |

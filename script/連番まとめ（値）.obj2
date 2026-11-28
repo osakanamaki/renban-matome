@@ -40,6 +40,9 @@
 --   表示番号 = 切り捨て(従う値 × (枚数 - 1) ÷ ゲージの上限)。0 で最初の画像、上限で最後の画像。
 --   値が負なら表示しない。上限より大きければ、最後の画像（満タン）のまま。
 --
+-- 静止画スロット:
+--   選んだ画像を、値に左右されず常に描く。ファイル名に番号は要らない。
+--
 -- テキスト数値スロット:
 --   テキストの中の {計算式} を計算結果に置き換えて、文字として描く（例: "HP {値1}"）。
 --
@@ -61,12 +64,14 @@ local SLOT_KIND_FORMULA = "計算式"
 local SLOT_KIND_NUMBER = "数値"
 local SLOT_KIND_REPEAT = "並べ"
 local SLOT_KIND_GAUGE = "ゲージ"
+local SLOT_KIND_STILL = "静止画"
 -- 画像を使うスロットの種類（「スロットに、連番の画像を設定してください。」の案内の対象）。
 local IMAGE_SLOT_KINDS = {
 	[SLOT_KIND_SEQUENCE] = true,
 	[SLOT_KIND_FORMULA] = true,
 	[SLOT_KIND_REPEAT] = true,
 	[SLOT_KIND_GAUGE] = true,
+	[SLOT_KIND_STILL] = true,
 }
 -- 連番スロット（複製並べ）で並べる数の上限（多すぎると重くなるため）。
 local MAX_REPEAT_COUNT = 100
@@ -573,6 +578,20 @@ local function resolve_gauge_slot(effect_key, values)
 	return { { kind = "image", path = path, x = placement.x, y = placement.y, scale = placement.scale } }, nil
 end
 
+-- 静止画スロット1つを読み、描くものを決める。値に左右されず、選んだ画像をそのまま描く。
+-- 戻り値: 描くものの配列、案内の文（不備が無いときは nil）
+local function resolve_still_slot(effect_key)
+	if not has_image(effect_key) then
+		return {}, nil
+	end
+	local image_path = read_item(effect_key, "画像")
+	if not file_exists(image_path) then
+		return {}, "選んだ画像が見つかりません：" .. file_name_of(image_path)
+	end
+	local placement = read_slot_placement(effect_key)
+	return { { kind = "image", path = image_path, x = placement.x, y = placement.y, scale = placement.scale } }, nil
+end
+
 -- 連番スロット（複製並べ）1つを読み、描くものを決める。並べる数だけ、同じ画像を描くものにする。
 -- 並べる位置は画像の大きさで決まるので、描くときに layout の情報から計算する。
 -- 戻り値: 描くものの配列、案内の文（不備が無いときは nil）
@@ -790,6 +809,8 @@ for slot_index = 1, #slot_effects do
 		items, guide_line = resolve_repeat_slot(slot_effect.effect_key, values)
 	elseif slot_effect.kind == SLOT_KIND_GAUGE then
 		items, guide_line = resolve_gauge_slot(slot_effect.effect_key, values)
+	elseif slot_effect.kind == SLOT_KIND_STILL then
+		items, guide_line = resolve_still_slot(slot_effect.effect_key)
 	else
 		guide_line = "この土台は「" .. slot_effect.kind .. "」のスロットに対応していません。"
 	end

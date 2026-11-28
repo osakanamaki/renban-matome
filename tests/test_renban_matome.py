@@ -1,4 +1,4 @@
-"""連番まとめ（土台「連番まとめ（値）」＋スロット）を、要件定義書 1.6.13 の受け入れ基準で確かめる。
+"""連番まとめ（土台「連番まとめ（値）」＋スロット）を、要件定義書 1.6.14 の受け入れ基準で確かめる。
 
 証跡のパスが Windows の上限（260 文字）を超えると描画できないため、テスト名と id は短くする。
 """
@@ -17,6 +17,7 @@ FORMULA_SLOT = "連番スロット（計算式）"
 NUMBER_SLOT = "テキスト数値スロット"
 REPEAT_SLOT = "連番スロット（複製並べ）"
 GAUGE_SLOT = "連番スロット（ゲージ）"
+STILL_SLOT = "静止画スロット"
 # 土台が対応していない種類のスロット（案内の確認用）。
 UNKNOWN_SLOT = "_試験_未知のスロット"
 # 土台が使う kernel32 の関数を、違う型で先に ffi で宣言するカスタムオブジェクト（何も描かない）。
@@ -96,6 +97,17 @@ def gauge_slot(image: Path | str = "", *, gauge_max: int = 100, count: int = 0, 
         "Y": f"{y:.1f}",
     }
     return Effect(GAUGE_SLOT, params)
+
+
+def still_slot(image: Path | str = "", *, x: float = 0, y: float = 0, scale: float = 100) -> Effect:
+    """静止画スロット。x・y は土台からのずれ、scale は拡大率（%）。"""
+    params: dict[str, object] = {
+        "画像": image,
+        "X": f"{x:.1f}",
+        "Y": f"{y:.1f}",
+        "拡大率": f"{scale:.2f}",
+    }
+    return Effect(STILL_SLOT, params)
 
 
 def number_slot(
@@ -502,6 +514,62 @@ def test_gauge_given_count_beyond_files(aviutl2: AviUtl2) -> None:
     image = aviutl2.render(project(base(100), gauge_slot(BAR, count=20)), [0]).images[0]
 
     assert image.getbbox() is None
+
+
+# ---- 静止画スロット ----
+
+
+@pytest.fixture
+def still_image(tmp_path: Path) -> Path:
+    """番号の無いファイル名の、日本語を含む静止画（bar_007 の複製）。"""
+    path = tmp_path / "アイコン.png"
+    shutil.copyfile(SAMPLES / "bar" / "bar_007.png", path)
+    return path
+
+
+def test_still_ignores_values(aviutl2: AviUtl2, still_image: Path) -> None:
+    """RM-F70: 番号の無いファイル名の画像を、値に左右されず常に表示する（値が -1 でも 999 でも）。"""
+    effect = base("-1.00,999.00,直線移動,0", 5, 6, 7, 8, 9, 10, 11)
+
+    result = aviutl2.render(project(effect, still_slot(still_image), end=2), [0, 1, 2])
+
+    for frame in (0, 1, 2):
+        assert count_pixels(result.images[frame], BAR_GREEN) == bar_pixels(7), f"frame {frame}"
+
+
+def test_still_position_and_scale(aviutl2: AviUtl2, still_image: Path) -> None:
+    """RM-F17: 静止画スロットの X・Y・拡大率で、ずらした位置に指定の大きさで描く。"""
+    plain = aviutl2.render(project(base(0), still_slot(still_image)), [0]).images[0]
+    moved = aviutl2.render(project(base(0), still_slot(still_image, x=-100, y=50, scale=50)), [0]).images[0]
+
+    left, top, right, bottom = color_mask(plain, BAR_GREEN).getbbox()
+    moved_left, moved_top, moved_right, moved_bottom = color_mask(moved, BAR_GREEN).getbbox()
+    assert (moved_left + moved_right) / 2 == pytest.approx(320 - 100 + ((left + right) / 2 - 320) / 2, abs=2)
+    assert (moved_top + moved_bottom) / 2 == pytest.approx(240 + 50 + ((top + bottom) / 2 - 240) / 2, abs=2)
+    assert moved_right - moved_left == pytest.approx((right - left) / 2, abs=2)
+
+
+def test_still_with_other_slots(aviutl2: AviUtl2, still_image: Path) -> None:
+    """静止画スロットは、ほかのスロットと一緒に1つの土台で描ける。"""
+    effect = base(3)
+
+    image = aviutl2.render(
+        project(effect, still_slot(still_image, y=-150), slot(NUMBER), width=1280), [0]
+    ).images[0]
+
+    upper = image.crop((0, 0, 1280, 160))
+    assert count_pixels(upper, BAR_GREEN) == bar_pixels(7)
+    assert_number_at(image, 640, 3)
+
+
+@pytest.mark.parametrize("image", ["", MISSING], ids=["no_image", "missing"])
+def test_still_guide(aviutl2: AviUtl2, image: Path | str) -> None:
+    """RM-F08: 画像が未設定・見つからないときは、連番スロットと同じ案内を出す。"""
+    still = aviutl2.render(project(base(0, guide="常に"), still_slot(image)), [0]).images[0]
+    sequence = aviutl2.render(project(base(0, guide="常に"), slot(image)), [0]).images[0]
+
+    assert still.getbbox() is not None
+    assert ImageChops.difference(still, sequence).getbbox() is None
 
 
 # ---- テキスト数値スロット ----
