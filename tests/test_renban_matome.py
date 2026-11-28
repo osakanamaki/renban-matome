@@ -391,8 +391,12 @@ def test_unset_slots_are_not_an_error(aviutl2: AviUtl2) -> None:
         ((3, 4), "値1 + 値2", 7),
         ((10,), "値1 * 53 / 100", 5),
         ((9,), "math.min(値1, 6)", 6),
+        ((20,), "値1 < 30 and 1 or 0", 1),
+        ((40,), "値1 < 30 and 1 or 0", 0),
+        ((120,), "値1 >= 100 and 2 or (値1 >= 50 and 1 or 0)", 2),
+        ((60,), "値1 >= 100 and 2 or (値1 >= 50 and 1 or 0)", 1),
     ],
-    ids=["minus", "sum", "ratio", "math"],
+    ids=["minus", "sum", "ratio", "math", "if_true", "if_false", "nested_2", "nested_1"],
 )
 def test_formula(aviutl2: AviUtl2, values: tuple[int, ...], formula: str, expected: int) -> None:
     """RM-F30・RM-F31: 計算式の結果（小数点以下は切り捨て）を表示番号にする。"""
@@ -433,6 +437,7 @@ def test_formula_loop_counts_from_the_end(aviutl2: AviUtl2) -> None:
         "値9",
         "値1 +",
         "",
+        "値1 < 30",
     ],
     ids=[
         "io",
@@ -447,6 +452,7 @@ def test_formula_loop_counts_from_the_end(aviutl2: AviUtl2) -> None:
         "v9",
         "syntax",
         "empty",
+        "boolean",
     ],
 )
 def test_formula_rejected(aviutl2: AviUtl2, formula: str) -> None:
