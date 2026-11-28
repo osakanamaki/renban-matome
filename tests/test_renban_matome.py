@@ -4,6 +4,7 @@
 """
 
 import shutil
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -169,6 +170,32 @@ def project(
     return Project(width, 480, [host])
 
 
+def cases_project(cases: Sequence[Sequence[Effect]], *, width: int = 640) -> Project:
+    """ケースごとに土台を1フレームずつずらして置いたプロジェクト。ケース i の土台はフレーム i だけにある。
+
+    cases の各要素は、1つの土台に付ける効果（土台、スロット…）。標準描画は自動で足す。
+    """
+    objects = [
+        TimelineObject(0, frame, frame, [*effects, Effect("標準描画")]) for frame, effects in enumerate(cases)
+    ]
+    return Project(width, 480, objects)
+
+
+def render_cases(
+    aviutl2: AviUtl2, cases: Sequence[Sequence[Effect]], *, width: int = 640
+) -> list[Image.Image]:
+    """cases を cases_project() で並べ、AviUtl2 を1回だけ起動してまとめて描く。返す画像の i 番目がケース i。
+
+    AviUtl2 の起動が試験時間のほとんどを占めるため、1フレームで確かめられるケースはまとめて描く。
+
+    同じ起動の中で描くので、土台が使い回す状態（数えた枚数など）はケースをまたいで残る。
+    初めて描くときの動きを確かめたいケースは、ほかのケースと違う画像を使う。
+    """
+    frames = list(range(len(cases)))
+    result = aviutl2.render(cases_project(cases, width=width), frames)
+    return [result.images[frame] for frame in frames]
+
+
 def color_mask(image: Image.Image, color: tuple[int, int, int]) -> Image.Image:
     rgba = image.convert("RGBA")
     pixels = [255 if a == 255 and (r, g, b) == color else 0 for r, g, b, a in rgba.get_flattened_data()]
@@ -242,15 +269,25 @@ def test_slots_follow_only_their_own_value(aviutl2: AviUtl2) -> None:
         assert_number_at(result.images[frame], 640, 3)
 
 
-@pytest.mark.parametrize("source", [2, 3, 4, 5, 6, 7, 8])
-def test_each_value_can_be_followed(aviutl2: AviUtl2, source: int) -> None:
-    """RM-F03: 値1〜値8のどれにも従える。ほかの値には従わない。"""
-    values = [0] * 8
-    values[source - 1] = 7
+def test_each_value_can_be_followed(aviutl2: AviUtl2) -> None:
+    """RM-F03: 値1〜値8のどれにも従える。ほかの値には従わない。
 
-    image = aviutl2.render(project(base(*values), slot(BAR, source=source)), [0]).images[0]
+    値1 はほかの試験で確かめているので、値2〜値8 を確かめる。従う値だけを 7、ほかを 0 にする。
+    """
+    sources = [2, 3, 4, 5, 6, 7, 8]
+    cases = []
+    for source in sources:
+        values = [0] * 8
+        values[source - 1] = 7
+        cases.append((base(*values), slot(BAR, source=source)))
 
-    assert count_pixels(image, BAR_GREEN) == bar_pixels(7)
+    images = render_cases(aviutl2, cases)
+
+    actual = {
+        f"値{source}": count_pixels(image, BAR_GREEN) for source, image in zip(sources, images, strict=True)
+    }
+    expected = {f"値{source}": bar_pixels(7) for source in sources}
+    assert actual == expected
 
 
 def test_selected_image_is_value_zero(aviutl2: AviUtl2) -> None:
@@ -266,61 +303,79 @@ def test_selected_image_is_value_zero(aviutl2: AviUtl2) -> None:
 # ---- 範囲外の扱いと枚数 ----
 
 
-@pytest.mark.parametrize(
-    ("value", "count"),
-    [(-1, 0), (IMAGE_COUNT, 0), (6, 6)],
-    ids=["negative", "beyond_count", "beyond_given_count"],
-)
-def test_hide_out_of_range(aviutl2: AviUtl2, value: int, count: int) -> None:
+def test_hide_out_of_range(aviutl2: AviUtl2) -> None:
     """RM-F14: 「表示しない」のとき、範囲外なら何も表示されず、スクリプトエラーも、ログのエラーも出ない。"""
-    slots = (slot(BAR, count=count), slot(NUMBER, count=count))
+    # (id, 値, 枚数（0 は自動）)
+    cases = [("negative", -1, 0), ("beyond_count", IMAGE_COUNT, 0), ("beyond_given_count", 6, 6)]
 
     # ログにエラーがあれば、render() が失敗する（allow_log_errors を渡していない）。
-    result = aviutl2.render(project(base(value), *slots), [0])
+    images = render_cases(
+        aviutl2,
+        [(base(value), slot(BAR, count=count), slot(NUMBER, count=count)) for _, value, count in cases],
+    )
 
-    assert result.images[0].getbbox() is None
+    drawn = [
+        case_id for (case_id, _, _), image in zip(cases, images, strict=True) if image.getbbox() is not None
+    ]
+    assert drawn == [], "何も表示しないはずのケースで、何かが描かれた"
 
 
-@pytest.mark.parametrize(
-    ("value", "count", "expected"),
-    [(IMAGE_COUNT, 0, 0), (IMAGE_COUNT + 3, 0, 3), (-1, 0, 10), (6, 5, 1), (-1, 5, 4)],
-    ids=["count", "count_plus_3", "minus_1", "given_count", "given_minus_1"],
-)
-def test_loop(aviutl2: AviUtl2, value: int, count: int, expected: int) -> None:
+def test_loop(aviutl2: AviUtl2) -> None:
     """RM-F14: 「ループ」のとき、枚数以上は先頭に戻り、負の番号は後ろから数える。枚数は自動でも指定でもよい。
 
     土台の値は -1 までなので、-2 以下は連番スロット（計算式）のテストで確かめる。
     """
-    image = aviutl2.render(project(base(value), slot(BAR, outside="ループ", count=count)), [0]).images[0]
+    # (id, 値, 枚数（0 は自動）, 表示される bar の番号)
+    cases = [
+        ("count", IMAGE_COUNT, 0, 0),
+        ("count_plus_3", IMAGE_COUNT + 3, 0, 3),
+        ("minus_1", -1, 0, 10),
+        ("given_count", 6, 5, 1),
+        ("given_minus_1", -1, 5, 4),
+    ]
 
-    assert count_pixels(image, BAR_GREEN) == bar_pixels(expected)
+    images = render_cases(
+        aviutl2, [(base(value), slot(BAR, outside="ループ", count=count)) for _, value, count, _ in cases]
+    )
+
+    actual = {case[0]: count_pixels(image, BAR_GREEN) for case, image in zip(cases, images, strict=True)}
+    expected = {case_id: bar_pixels(number) for case_id, _, _, number in cases}
+    assert actual == expected
 
 
-@pytest.mark.parametrize(
-    ("value", "count", "expected"),
-    [(-1, 0, 0), (50, 0, 10), (8, 5, 4)],
-    ids=["negative", "beyond_count", "given_count"],
-)
-def test_clamp(aviutl2: AviUtl2, value: int, count: int, expected: int) -> None:
+def test_clamp(aviutl2: AviUtl2) -> None:
     """RM-F14: 「端で止める」のとき、負は最初の画像、枚数以上は最後の画像になる。"""
-    image = aviutl2.render(project(base(value), slot(BAR, outside="端で止める", count=count)), [0]).images[0]
+    # (id, 値, 枚数（0 は自動）, 表示される bar の番号)
+    cases = [("negative", -1, 0, 0), ("beyond_count", 50, 0, 10), ("given_count", 8, 5, 4)]
 
-    assert count_pixels(image, BAR_GREEN) == bar_pixels(expected)
+    images = render_cases(
+        aviutl2, [(base(value), slot(BAR, outside="端で止める", count=count)) for _, value, count, _ in cases]
+    )
+
+    actual = {case[0]: count_pixels(image, BAR_GREEN) for case, image in zip(cases, images, strict=True)}
+    expected = {case_id: bar_pixels(number) for case_id, _, _, number in cases}
+    assert actual == expected
 
 
-@pytest.mark.parametrize("outside", ["ループ", "端で止める"], ids=["loop", "clamp"])
-def test_given_count_beyond_files(aviutl2: AviUtl2, outside: str) -> None:
+def test_given_count_beyond_files(aviutl2: AviUtl2) -> None:
     """枚数を実際（11 枚）より多く指定し、無い番号の画像になったときは、何も表示しない（仕様）。
 
     存在しない画像を読み込まないので、ログにエラーも出ない。
     """
     # 枚数 20 で値 19 は、ループでも端で止めるでも 19 番（bar_019.png、存在しない）になる。
-    slots = (slot(BAR, outside=outside, count=20), slot(NUMBER, outside=outside, count=20))
+    outsides = ["ループ", "端で止める"]
 
     # ログにエラーがあれば、render() が失敗する（allow_log_errors を渡していない）。
-    result = aviutl2.render(project(base(19), *slots), [0])
+    images = render_cases(
+        aviutl2,
+        [
+            (base(19), slot(BAR, outside=outside, count=20), slot(NUMBER, outside=outside, count=20))
+            for outside in outsides
+        ],
+    )
 
-    assert result.images[0].getbbox() is None
+    drawn = [outside for outside, image in zip(outsides, images, strict=True) if image.getbbox() is not None]
+    assert drawn == [], "何も表示しないはずのケースで、何かが描かれた"
 
 
 def make_sequence(folder: Path, image_count: int) -> Path:
@@ -331,18 +386,26 @@ def make_sequence(folder: Path, image_count: int) -> Path:
     return folder / "seq_000.png"
 
 
-@pytest.mark.parametrize("image_count", [1, 2, 3, 4, 5, 8, 9, 11])
-def test_auto_count_boundary(aviutl2: AviUtl2, tmp_path: Path, image_count: int) -> None:
+def test_auto_count_boundary(aviutl2: AviUtl2, tmp_path: Path) -> None:
     """RM-F15: 枚数を自動で数える処理（倍々に調べてから二分探索）が、2 の累乗の前後でも正しく数える。
 
     端で止めるで大きな値を指定すると、最後の画像（image_count - 1 番）が表示される。
+    連番はケースごとに別のフォルダに作るので、数えた枚数の使い回しは効かず、どれも初めて数える。
     """
-    first_image = make_sequence(tmp_path / "seq", image_count)
+    image_counts = [1, 2, 3, 4, 5, 8, 9, 11]
+    first_images = [
+        make_sequence(tmp_path / f"seq{image_count}", image_count) for image_count in image_counts
+    ]
 
-    image = aviutl2.render(project(base(50), slot(first_image, outside="端で止める")), [0]).images[0]
+    images = render_cases(
+        aviutl2, [(base(50), slot(first_image, outside="端で止める")) for first_image in first_images]
+    )
 
-    assert image.getbbox() is not None
-    assert count_pixels(image, BAR_GREEN) == bar_pixels(image_count - 1)
+    actual = {f"{n}枚": count_pixels(image, BAR_GREEN) for n, image in zip(image_counts, images, strict=True)}
+    expected = {f"{n}枚": bar_pixels(n - 1) for n in image_counts}
+    assert actual == expected
+    # bar_000 は緑が無いので、1 枚のときも何かが描かれていることを別に確かめる。
+    assert all(image.getbbox() is not None for image in images)
 
 
 def test_auto_count_reused_across_frames(aviutl2: AviUtl2, tmp_path: Path) -> None:
@@ -384,37 +447,40 @@ def test_unset_slots_are_not_an_error(aviutl2: AviUtl2) -> None:
 # ---- 連番スロット（計算式） ----
 
 
-@pytest.mark.parametrize(
-    ("values", "formula", "expected"),
-    [
-        ((1,), "値1 - 1", 0),
-        ((3, 4), "値1 + 値2", 7),
-        ((10,), "値1 * 53 / 100", 5),
-        ((9,), "math.min(値1, 6)", 6),
-        ((20,), "値1 < 30 and 1 or 0", 1),
-        ((40,), "値1 < 30 and 1 or 0", 0),
-        ((120,), "値1 >= 100 and 2 or (値1 >= 50 and 1 or 0)", 2),
-        ((60,), "値1 >= 100 and 2 or (値1 >= 50 and 1 or 0)", 1),
+def test_formula(aviutl2: AviUtl2) -> None:
+    """RM-F30・RM-F31: 計算式の結果（小数点以下は切り捨て）を表示番号にする。
+
+    結果が 0 未満なら何も出さない（"値1 - 1" で値 0）。
+    """
+    # (id, 土台の値, 計算式, 表示される bar の番号。None は何も出さない)
+    cases = [
+        ("minus", (1,), "値1 - 1", 0),
+        ("below_zero", (0,), "値1 - 1", None),
+        ("sum", (3, 4), "値1 + 値2", 7),
+        ("ratio", (10,), "値1 * 53 / 100", 5),
+        ("math", (9,), "math.min(値1, 6)", 6),
+        ("if_true", (20,), "値1 < 30 and 1 or 0", 1),
+        ("if_false", (40,), "値1 < 30 and 1 or 0", 0),
+        ("nested_2", (120,), "値1 >= 100 and 2 or (値1 >= 50 and 1 or 0)", 2),
+        ("nested_1", (60,), "値1 >= 100 and 2 or (値1 >= 50 and 1 or 0)", 1),
         # 100 * 0.29 は、計算の誤差で 28.999999999999996 になる。誤差を取り除いてから切り捨てる。
-        ((100,), "値1 * 0.29 - 20", 9),
-    ],
-    ids=["minus", "sum", "ratio", "math", "if_true", "if_false", "nested_2", "nested_1", "float_error"],
-)
-def test_formula(aviutl2: AviUtl2, values: tuple[int, ...], formula: str, expected: int) -> None:
-    """RM-F30・RM-F31: 計算式の結果（小数点以下は切り捨て）を表示番号にする。"""
-    image = aviutl2.render(project(base(*values), formula_slot(BAR, formula)), [0]).images[0]
+        ("float_error", (100,), "値1 * 0.29 - 20", 9),
+    ]
 
-    assert count_pixels(image, BAR_GREEN) == bar_pixels(expected)
-
-
-def test_formula_hides_below_zero(aviutl2: AviUtl2) -> None:
-    """値 0 のときは何も出さず、1 から選んだ画像を出す（"値1 - 1"）。"""
-    result = aviutl2.render(
-        project(base("0.00,1.00,直線移動,0"), formula_slot(BAR, "値1 - 1"), end=1), [0, 1]
+    images = render_cases(
+        aviutl2, [(base(*values), formula_slot(BAR, formula)) for _, values, formula, _ in cases]
     )
 
-    assert result.images[0].getbbox() is None
-    assert count_pixels(result.images[1], BAR_GREEN) == bar_pixels(0)
+    actual = {}
+    expected = {}
+    for (case_id, _, _, number), image in zip(cases, images, strict=True):
+        if number is None:
+            actual[case_id] = image.getbbox()
+            expected[case_id] = None
+        else:
+            actual[case_id] = count_pixels(image, BAR_GREEN)
+            expected[case_id] = bar_pixels(number)
+    assert actual == expected
 
 
 def test_formula_loop_counts_from_the_end(aviutl2: AviUtl2) -> None:
@@ -424,76 +490,84 @@ def test_formula_loop_counts_from_the_end(aviutl2: AviUtl2) -> None:
     assert count_pixels(image, BAR_GREEN) == bar_pixels(8)
 
 
-@pytest.mark.parametrize(
-    "formula",
-    [
-        "io.open",
-        "os.execute",
-        "require",
-        "loadstring",
-        "(function() return 1 end)()",
-        "math.random(1, 6)",
-        "string.rep",
-        "(値1 .. 値2):rep(3)",
-        '"1"',
-        "値9",
-        "値1 +",
-        "",
-        "値1 < 30",
-    ],
-    ids=[
-        "io",
-        "os",
-        "require",
-        "loadstring",
-        "function",
-        "random",
-        "string",
-        "method",
-        "quote",
-        "v9",
-        "syntax",
-        "empty",
-        "boolean",
-    ],
-)
-def test_formula_rejected(aviutl2: AviUtl2, formula: str) -> None:
-    """RM-F32: 使えない名前や記号を含む計算式は計算せず、画像を出さずに案内を出す。"""
-    hidden = aviutl2.render(project(base(1, guide="表示しない"), formula_slot(BAR, formula)), [0])
-    guided = aviutl2.render(project(base(1, guide="常に"), formula_slot(BAR, formula)), [0])
+REJECTED_FORMULAS = {
+    "io": "io.open",
+    "os": "os.execute",
+    "require": "require",
+    "loadstring": "loadstring",
+    "function": "(function() return 1 end)()",
+    "random": "math.random(1, 6)",
+    "string": "string.rep",
+    "method": "(値1 .. 値2):rep(3)",
+    "quote": '"1"',
+    "v9": "値9",
+    "syntax": "値1 +",
+    "empty": "",
+    "boolean": "値1 < 30",
+}
 
-    assert hidden.images[0].getbbox() is None
-    assert guided.images[0].getbbox() is not None
-    assert count_pixels(guided.images[0], BAR_GREEN) == 0
-    assert not guided.log_lines("script exception")
+
+def test_formula_rejected(aviutl2: AviUtl2) -> None:
+    """RM-F32: 使えない名前や記号を含む計算式は計算せず、画像を出さずに案内を出す。
+
+    「案内の表示」が「表示しない」なら何も出ず、「常に」なら案内だけが出る。
+    """
+    case_ids = list(REJECTED_FORMULAS)
+    formulas = list(REJECTED_FORMULAS.values())
+    hidden_cases = [(base(1, guide="表示しない"), formula_slot(BAR, formula)) for formula in formulas]
+    guided_cases = [(base(1, guide="常に"), formula_slot(BAR, formula)) for formula in formulas]
+
+    # 計算式を実行してしまい、スクリプトエラーになれば、render() が失敗する（ログの script exception）。
+    images = render_cases(aviutl2, hidden_cases + guided_cases)
+    hidden_images = images[: len(case_ids)]
+    guided_images = images[len(case_ids) :]
+
+    drawn_when_hidden = [
+        case_id for case_id, image in zip(case_ids, hidden_images, strict=True) if image.getbbox() is not None
+    ]
+    no_guide = [
+        case_id for case_id, image in zip(case_ids, guided_images, strict=True) if image.getbbox() is None
+    ]
+    bar_drawn = [
+        case_id
+        for case_id, image in zip(case_ids, guided_images, strict=True)
+        if count_pixels(image, BAR_GREEN) > 0
+    ]
+    assert drawn_when_hidden == [], "「表示しない」なのに何かが描かれた"
+    assert no_guide == [], "「常に」なのに案内が出ていない"
+    assert bar_drawn == [], "使えない計算式なのに画像が描かれた"
 
 
 # ---- 連番スロット（ゲージ） ----
 
 
-@pytest.mark.parametrize(
-    ("value", "gauge_max", "count", "expected"),
-    [
-        (0, 100, 0, 0),
-        (100, 100, 0, 10),
-        (55, 100, 0, 5),
-        (59, 100, 0, 5),
-        (150, 100, 0, 10),
-        (999, 100, 0, 10),
-        (7, 10, 0, 7),
-        (500, 500, 0, 10),
-        (100, 100, 5, 4),
-        (50, 100, 5, 2),
-    ],
-    ids=["empty", "full", "middle", "floor", "over", "over_999", "max_10", "max_500", "given", "given_half"],
-)
-def test_gauge(aviutl2: AviUtl2, value: int, gauge_max: int, count: int, expected: int) -> None:
+def test_gauge(aviutl2: AviUtl2) -> None:
     """RM-F60: 表示番号は 切り捨て(値 × (枚数 - 1) ÷ ゲージの上限)。上限を超えた値は満タンのまま。"""
-    image = aviutl2.render(
-        project(base(value), gauge_slot(BAR, gauge_max=gauge_max, count=count)), [0]
-    ).images[0]
+    # (id, 値, ゲージの上限, 枚数（0 は自動）, 表示される bar の番号)
+    cases = [
+        ("empty", 0, 100, 0, 0),
+        ("full", 100, 100, 0, 10),
+        ("middle", 55, 100, 0, 5),
+        ("floor", 59, 100, 0, 5),
+        ("over", 150, 100, 0, 10),
+        ("over_999", 999, 100, 0, 10),
+        ("max_10", 7, 10, 0, 7),
+        ("max_500", 500, 500, 0, 10),
+        ("given", 100, 100, 5, 4),
+        ("given_half", 50, 100, 5, 2),
+    ]
 
-    assert count_pixels(image, BAR_GREEN) == bar_pixels(expected)
+    images = render_cases(
+        aviutl2,
+        [
+            (base(value), gauge_slot(BAR, gauge_max=gauge_max, count=count))
+            for _, value, gauge_max, count, _ in cases
+        ],
+    )
+
+    actual = {case[0]: count_pixels(image, BAR_GREEN) for case, image in zip(cases, images, strict=True)}
+    expected = {case_id: bar_pixels(number) for case_id, _, _, _, number in cases}
+    assert actual == expected
 
 
 def test_gauge_counts_from_selected_image(aviutl2: AviUtl2) -> None:
@@ -516,16 +590,35 @@ def test_gauge_hides_negative(aviutl2: AviUtl2) -> None:
     assert count_pixels(result.images[2], BAR_GREEN) == bar_pixels(0)
 
 
-@pytest.mark.parametrize(
-    "image", ["", NOT_SEQUENTIAL, MISSING], ids=["no_image", "not_sequential", "missing"]
-)
-def test_gauge_guide(aviutl2: AviUtl2, image: Path | str) -> None:
-    """RM-F08: 画像が未設定・連番の規則に合わない・見つからないときは、連番スロットと同じ案内を出す。"""
-    gauge = aviutl2.render(project(base(0, guide="常に"), gauge_slot(image)), [0]).images[0]
-    sequence = aviutl2.render(project(base(0, guide="常に"), slot(image)), [0]).images[0]
+def test_gauge_and_still_guide(aviutl2: AviUtl2) -> None:
+    """RM-F08: ゲージ・静止画スロットも、画像に不備があるときは、連番スロットと同じ案内を出す。
 
-    assert gauge.getbbox() is not None
-    assert ImageChops.difference(gauge, sequence).getbbox() is None
+    ゲージは未設定・連番の規則に合わない・見つからないとき、静止画は未設定・見つからないとき
+    （静止画は番号の無い画像を使うので、連番の規則は問わない）。
+    """
+    # (id, 確かめるスロット, 同じ画像の連番スロット)
+    cases = [
+        ("gauge_no_image", gauge_slot(""), slot("")),
+        ("gauge_not_sequential", gauge_slot(NOT_SEQUENTIAL), slot(NOT_SEQUENTIAL)),
+        ("gauge_missing", gauge_slot(MISSING), slot(MISSING)),
+        ("still_no_image", still_slot(""), slot("")),
+        ("still_missing", still_slot(MISSING), slot(MISSING)),
+    ]
+    target_cases = [(base(0, guide="常に"), target) for _, target, _ in cases]
+    sequence_cases = [(base(0, guide="常に"), sequence) for _, _, sequence in cases]
+
+    images = render_cases(aviutl2, target_cases + sequence_cases)
+    target_images = images[: len(cases)]
+    sequence_images = images[len(cases) :]
+
+    no_guide = [case[0] for case, image in zip(cases, target_images, strict=True) if image.getbbox() is None]
+    different = [
+        case[0]
+        for case, target, sequence in zip(cases, target_images, sequence_images, strict=True)
+        if ImageChops.difference(target, sequence).getbbox() is not None
+    ]
+    assert no_guide == [], "案内が出ていない"
+    assert different == [], "連番スロットの案内と見た目が違う"
 
 
 def test_gauge_given_count_beyond_files(aviutl2: AviUtl2) -> None:
@@ -558,8 +651,10 @@ def test_still_ignores_values(aviutl2: AviUtl2, still_image: Path) -> None:
 
 def test_still_position_and_scale(aviutl2: AviUtl2, still_image: Path) -> None:
     """RM-F17: 静止画スロットの X・Y・拡大率で、ずらした位置に指定の大きさで描く。"""
-    plain = aviutl2.render(project(base(0), still_slot(still_image)), [0]).images[0]
-    moved = aviutl2.render(project(base(0), still_slot(still_image, x=-100, y=50, scale=50)), [0]).images[0]
+    plain, moved = render_cases(
+        aviutl2,
+        [(base(0), still_slot(still_image)), (base(0), still_slot(still_image, x=-100, y=50, scale=50))],
+    )
 
     left, top, right, bottom = color_mask(plain, BAR_GREEN).getbbox()
     moved_left, moved_top, moved_right, moved_bottom = color_mask(moved, BAR_GREEN).getbbox()
@@ -579,16 +674,6 @@ def test_still_with_other_slots(aviutl2: AviUtl2, still_image: Path) -> None:
     upper = image.crop((0, 0, 1280, 160))
     assert count_pixels(upper, BAR_GREEN) == bar_pixels(7)
     assert_number_at(image, 640, 3)
-
-
-@pytest.mark.parametrize("image", ["", MISSING], ids=["no_image", "missing"])
-def test_still_guide(aviutl2: AviUtl2, image: Path | str) -> None:
-    """RM-F08: 画像が未設定・見つからないときは、連番スロットと同じ案内を出す。"""
-    still = aviutl2.render(project(base(0, guide="常に"), still_slot(image)), [0]).images[0]
-    sequence = aviutl2.render(project(base(0, guide="常に"), slot(image)), [0]).images[0]
-
-    assert still.getbbox() is not None
-    assert ImageChops.difference(still, sequence).getbbox() is None
 
 
 # ---- テキスト数値スロット ----
@@ -626,86 +711,78 @@ def test_number_text_color(aviutl2: AviUtl2) -> None:
 
 def test_number_rejected_formula(aviutl2: AviUtl2) -> None:
     """RM-F32: 使えない計算式を含むテキストは表示せず、案内を出す。"""
-    hidden = aviutl2.render(project(base(1, guide="表示しない"), number_slot("HP {io}")), [0])
-    guided = aviutl2.render(project(base(1, guide="常に"), number_slot("HP {io}")), [0])
+    hidden, guided = render_cases(
+        aviutl2,
+        [
+            (base(1, guide="表示しない"), number_slot("HP {io}")),
+            (base(1, guide="常に"), number_slot("HP {io}")),
+        ],
+    )
 
-    assert hidden.images[0].getbbox() is None
-    assert guided.images[0].getbbox() is not None
+    assert hidden.getbbox() is None
+    assert guided.getbbox() is not None
 
 
-@pytest.mark.parametrize(
-    ("value", "formula", "decimal", "digits", "expected_text"),
-    [
-        (0, "{値1 * -1}", "四捨五入", 0, "0"),
-        (1, "{値1 * 2^53}", "四捨五入", 0, "9007199254740992"),
-        (1, "{値1 * 1e20}", "四捨五入", 0, "1e+20"),
-        (1, "{値1 * 1e20}", "小数第2位まで", 10, "1e+20"),
-        (100, "{値1 / 3}", "四捨五入", 0, "33"),
-        (100, "{値1 / 3}", "小数第1位まで", 0, "33.3"),
-        (100, "{値1 / 6}", "切り捨て", 0, "16"),
-        (100, "{値1 / 6}", "四捨五入", 0, "17"),
-        (100, "{値1 / 6}", "小数第2位まで", 0, "16.67"),
-        (100, "{値1 / 20}", "四捨五入", 3, "005"),
-        (100, "{値1 / 20}", "小数第1位まで", 0, "5.0"),
-        (100, "{値1 / 400}", "小数第1位まで", 0, "0.3"),
-        (100, "{値1 / 1000}", "小数第2位まで", 0, "0.10"),
-        (100, "{値1 / 8}", "小数第1位まで", 3, "012.5"),
-        (100, "{値1 * -7 / 100}", "四捨五入", 3, "-007"),
-        (100, "{値1 * -1 / 6}", "切り捨て", 0, "-16"),
-        (100, "{値1 * -1 / 6}", "四捨五入", 0, "-17"),
-        (100, "{値1 * -1 / 40}", "四捨五入", 0, "-3"),
-        (100, "{値1 * -1 / 250}", "四捨五入", 0, "0"),
-        (100, "{値1}", "四捨五入", 10, "0000000100"),
-        (100, "{値1 * 100000000}", "四捨五入", 10, "10000000000"),
-        (100, "HP {値1} / {値1 / 4}", "四捨五入", 3, "HP 100 / 025"),
-        # 計算の誤差（100 * 0.29 は 28.999999999999996 になる）を取り除いてから丸める。
-        (100, "{値1 * 0.29}", "切り捨て", 0, "29"),
-        (10, "{値1 * 0.1005}-{1.005}", "小数第2位まで", 0, "1.01-1.01"),
-        (1, "{値1 * -1.005}", "小数第2位まで", 0, "-1.01"),
-    ],
-    ids=[
-        "minus_zero",
-        "exact_limit",
-        "huge",
-        "huge_styled",
-        "round",
-        "one_place",
-        "truncate",
-        "round_up",
-        "two_places",
-        "pad",
-        "one_place_zero",
-        "one_place_half",
-        "two_places_zero",
-        "pad_fraction",
-        "pad_negative",
-        "truncate_negative",
-        "round_negative",
-        "round_negative_half",
-        "round_to_zero",
-        "pad_max",
-        "longer_than_digits",
-        "every_formula",
-        "float_truncate",
-        "float_round",
-        "float_round_negative",
-    ],
-)
-def test_number_format(
-    aviutl2: AviUtl2, value: int, formula: str, decimal: str, digits: int, expected_text: str
-) -> None:
+# (id, 値1, 計算式を書いたテキスト, 小数の扱い, 桁数（0 は「しない」）, 期待する文字)
+NUMBER_FORMAT_CASES = [
+    ("minus_zero", 0, "{値1 * -1}", "四捨五入", 0, "0"),
+    ("exact_limit", 1, "{値1 * 2^53}", "四捨五入", 0, "9007199254740992"),
+    ("huge", 1, "{値1 * 1e20}", "四捨五入", 0, "1e+20"),
+    ("huge_styled", 1, "{値1 * 1e20}", "小数第2位まで", 10, "1e+20"),
+    ("round", 100, "{値1 / 3}", "四捨五入", 0, "33"),
+    ("one_place", 100, "{値1 / 3}", "小数第1位まで", 0, "33.3"),
+    ("truncate", 100, "{値1 / 6}", "切り捨て", 0, "16"),
+    ("round_up", 100, "{値1 / 6}", "四捨五入", 0, "17"),
+    ("two_places", 100, "{値1 / 6}", "小数第2位まで", 0, "16.67"),
+    ("pad", 100, "{値1 / 20}", "四捨五入", 3, "005"),
+    ("one_place_zero", 100, "{値1 / 20}", "小数第1位まで", 0, "5.0"),
+    ("one_place_half", 100, "{値1 / 400}", "小数第1位まで", 0, "0.3"),
+    ("two_places_zero", 100, "{値1 / 1000}", "小数第2位まで", 0, "0.10"),
+    ("pad_fraction", 100, "{値1 / 8}", "小数第1位まで", 3, "012.5"),
+    ("pad_negative", 100, "{値1 * -7 / 100}", "四捨五入", 3, "-007"),
+    ("truncate_negative", 100, "{値1 * -1 / 6}", "切り捨て", 0, "-16"),
+    ("round_negative", 100, "{値1 * -1 / 6}", "四捨五入", 0, "-17"),
+    ("round_negative_half", 100, "{値1 * -1 / 40}", "四捨五入", 0, "-3"),
+    ("round_to_zero", 100, "{値1 * -1 / 250}", "四捨五入", 0, "0"),
+    ("pad_max", 100, "{値1}", "四捨五入", 10, "0000000100"),
+    ("longer_than_digits", 100, "{値1 * 100000000}", "四捨五入", 10, "10000000000"),
+    ("every_formula", 100, "HP {値1} / {値1 / 4}", "四捨五入", 3, "HP 100 / 025"),
+    # 計算の誤差（100 * 0.29 は 28.999999999999996 になる）を取り除いてから丸める。
+    ("float_truncate", 100, "{値1 * 0.29}", "切り捨て", 0, "29"),
+    ("float_round", 10, "{値1 * 0.1005}-{1.005}", "小数第2位まで", 0, "1.01-1.01"),
+    ("float_round_negative", 1, "{値1 * -1.005}", "小数第2位まで", 0, "-1.01"),
+]
+
+
+def test_number_format(aviutl2: AviUtl2) -> None:
     """RM-F43・RM-F44: 計算結果は、小数の扱いで丸め、桁数に満たない整数部分の前を 0 で埋めて表示される。
 
     全桁を正確に表せない大きな数は、Lua の書き方で表示される。
     計算式を書いたテキストと、期待する文字をそのまま書いたテキストの描画を比べる。
     """
-    actual = aviutl2.render(
-        project(base(value), number_slot(formula, decimal=decimal, digits=digits)), [0]
-    ).images[0]
-    expected = aviutl2.render(project(base(value), number_slot(expected_text)), [0]).images[0]
+    actual_cases = [
+        (base(value), number_slot(formula, decimal=decimal, digits=digits))
+        for _, value, formula, decimal, digits, _ in NUMBER_FORMAT_CASES
+    ]
+    expected_cases = [
+        (base(value), number_slot(expected_text)) for _, value, _, _, _, expected_text in NUMBER_FORMAT_CASES
+    ]
 
-    assert actual.getbbox() is not None
-    assert ImageChops.difference(actual, expected).getbbox() is None
+    images = render_cases(aviutl2, actual_cases + expected_cases)
+    actual_images = images[: len(NUMBER_FORMAT_CASES)]
+    expected_images = images[len(NUMBER_FORMAT_CASES) :]
+
+    case_ids = [case[0] for case in NUMBER_FORMAT_CASES]
+    nothing_drawn = [
+        case_id for case_id, image in zip(case_ids, actual_images, strict=True) if image.getbbox() is None
+    ]
+    different = [
+        f"{case[0]}（期待: {case[5]!r}）"
+        for case, actual, expected in zip(NUMBER_FORMAT_CASES, actual_images, expected_images, strict=True)
+        if ImageChops.difference(actual, expected).getbbox() is not None
+    ]
+    assert nothing_drawn == [], "何も描かれていない"
+    assert different == [], "期待する文字の描画と違う"
 
 
 # ---- 連番スロット（複製並べ） ----
@@ -724,30 +801,42 @@ def test_repeat_count_follows_value(aviutl2: AviUtl2) -> None:
     assert count_pixels(image, NUMBER_WHITE) == single * 4
 
 
-@pytest.mark.parametrize(
-    ("align", "margin"),
-    [("左揃え", 0), ("左揃え", 10), ("中央揃え", 10), ("右揃え", 10)],
-    ids=["left", "left_margin", "center", "right"],
-)
-def test_repeat_alignment(aviutl2: AviUtl2, align: str, margin: float) -> None:
+def test_repeat_alignment(aviutl2: AviUtl2) -> None:
     """RM-F52: 並べ方と余白で、並びの位置が決まる。並びの上端は土台の位置。"""
-    image = aviutl2.render(
-        project(base(3, 3), repeat_slot(NUMBER, margin=margin, align=align), width=1280), [0]
-    ).images[0]
+    # (id, 並べ方, 余白)
+    cases = [
+        ("left", "左揃え", 0),
+        ("left_margin", "左揃え", 10),
+        ("center", "中央揃え", 10),
+        ("right", "右揃え", 10),
+    ]
+
+    images = render_cases(
+        aviutl2,
+        [(base(3, 3), repeat_slot(NUMBER, margin=margin, align=align)) for _, align, margin in cases],
+        width=1280,
+    )
 
     white_left, white_top, white_right, _ = number_white_box(3)
-    cell_width = NUMBER_WIDTH + margin * 2
-    row_width = cell_width * 3
-    if align == "左揃え":
-        row_left = 640
-    elif align == "右揃え":
-        row_left = 640 - row_width
-    else:
-        row_left = 640 - row_width / 2
-    left, top, right, _ = color_mask(image, NUMBER_WHITE).getbbox()
-    assert left == pytest.approx(row_left + margin + white_left, abs=1)
-    assert right == pytest.approx(row_left + cell_width * 2 + margin + white_right, abs=1)
-    assert top == pytest.approx(240 + margin + white_top, abs=1)
+    actual = {}
+    expected = {}
+    for (case_id, align, margin), image in zip(cases, images, strict=True):
+        cell_width = NUMBER_WIDTH + margin * 2
+        row_width = cell_width * 3
+        if align == "左揃え":
+            row_left = 640
+        elif align == "右揃え":
+            row_left = 640 - row_width
+        else:
+            row_left = 640 - row_width / 2
+        left, top, right, _ = color_mask(image, NUMBER_WHITE).getbbox()
+        actual[case_id] = (left, right, top)
+        expected[case_id] = (
+            pytest.approx(row_left + margin + white_left, abs=1),
+            pytest.approx(row_left + cell_width * 2 + margin + white_right, abs=1),
+            pytest.approx(240 + margin + white_top, abs=1),
+        )
+    assert actual == expected
 
 
 def test_repeat_wraps(aviutl2: AviUtl2) -> None:
@@ -761,26 +850,24 @@ def test_repeat_wraps(aviutl2: AviUtl2) -> None:
     assert bottom - top == pytest.approx(NUMBER_HEIGHT + white_bottom - white_top, abs=1)
 
 
-@pytest.mark.parametrize("count", [0, -1], ids=["zero", "negative"])
-def test_repeat_nothing_below_one(aviutl2: AviUtl2, count: int) -> None:
+def test_repeat_nothing_below_one(aviutl2: AviUtl2) -> None:
     """RM-F51: 並べる数が 0 以下なら、何も表示しない。"""
-    image = aviutl2.render(project(base(3, count), repeat_slot(NUMBER)), [0]).images[0]
+    zero, negative = render_cases(
+        aviutl2, [(base(3, 0), repeat_slot(NUMBER)), (base(3, -1), repeat_slot(NUMBER))]
+    )
 
-    assert image.getbbox() is None
+    assert zero.getbbox() is None
+    assert negative.getbbox() is None
 
 
 def test_repeat_limit(aviutl2: AviUtl2) -> None:
     """RM-F51: 並べる数は 100 まで。150 を指定しても 100 個と同じになる。"""
-
-    def render_count(count: int) -> Image.Image:
-        effect = base(3, count)
-        return aviutl2.render(project(effect, repeat_slot(NUMBER, wrap=20, scale=5), width=1280), [0]).images[
-            0
-        ]
-
-    at_limit = render_count(100)
-    over_limit = render_count(150)
-    under_limit = render_count(99)
+    counts = [100, 150, 99]
+    at_limit, over_limit, under_limit = render_cases(
+        aviutl2,
+        [(base(3, count), repeat_slot(NUMBER, wrap=20, scale=5)) for count in counts],
+        width=1280,
+    )
 
     assert ImageChops.difference(at_limit, over_limit).getbbox() is None
     assert ImageChops.difference(at_limit, under_limit).getbbox() is not None
@@ -853,9 +940,13 @@ def japanese_bar(tmp_path: Path) -> Path:
 def test_japanese_path(aviutl2: AviUtl2, japanese_bar: Path) -> None:
     """フォルダ名やファイル名に日本語を含む画像も、表示でき、枚数も数えられる。"""
     # ループで、枚数（11 枚）を数える処理も通す。値 14 は 3 番目に戻る。
-    slots = (slot(japanese_bar, source=1), slot(japanese_bar, source=2, outside="ループ"))
-    image_shown = aviutl2.render(project(base(3, 0), slots[0]), [0]).images[0]
-    image_loop = aviutl2.render(project(base(0, 14), slots[1]), [0]).images[0]
+    image_shown, image_loop = render_cases(
+        aviutl2,
+        [
+            (base(3, 0), slot(japanese_bar, source=1)),
+            (base(0, 14), slot(japanese_bar, source=2, outside="ループ")),
+        ],
+    )
 
     assert count_pixels(image_shown, BAR_GREEN) == bar_pixels(3)
     assert count_pixels(image_loop, BAR_GREEN) == bar_pixels(3)
@@ -877,34 +968,37 @@ def test_other_ffi_declarations(aviutl2: AviUtl2, japanese_bar: Path) -> None:
 
 # ---- 案内 ----
 
-GUIDE_CASES = [
-    (),
-    (slot(),),
-    (slot(NOT_SEQUENTIAL),),
-    (slot(MISSING),),
-    (Effect(UNKNOWN_SLOT),),
-]
-GUIDE_IDS = ["no_slot", "no_image", "not_sequential", "missing", "unknown_kind"]
+# 案内が出るスロットの組み合わせ。id は、基準画像のフレーム番号の順（frame_00000 が no_slot）。
+GUIDE_CASES = {
+    "no_slot": (),
+    "no_image": (slot(),),
+    "not_sequential": (slot(NOT_SEQUENTIAL),),
+    "missing": (slot(MISSING),),
+    "unknown_kind": (Effect(UNKNOWN_SLOT),),
+}
 
 
-@pytest.mark.parametrize("slots", GUIDE_CASES, ids=GUIDE_IDS)
-def test_guide_not_in_output(aviutl2: AviUtl2, slots: tuple[Effect, ...]) -> None:
+def test_guide_not_in_output(aviutl2: AviUtl2) -> None:
     """「案内の表示」が「選択中だけ」なら、出力には案内が表示されない。"""
-    result = aviutl2.render(project(base(0), *slots), [0])
+    images = render_cases(aviutl2, [(base(0), *slots) for slots in GUIDE_CASES.values()])
 
-    assert result.images[0].getbbox() is None
+    drawn = [
+        case_id for case_id, image in zip(GUIDE_CASES, images, strict=True) if image.getbbox() is not None
+    ]
+    assert drawn == [], "出力に案内が描かれた"
 
 
 def test_guide_shown_only_when_selected(aviutl2: AviUtl2) -> None:
-    """RM-F08: 「選択中だけ」なら、土台を選択しているときのプレビューにだけ案内が表示される。"""
+    """RM-F08: 「選択中だけ」なら、土台を選択しているときのプレビューに案内が表示される。
+
+    選択していない出力に表示されないことは、test_guide_not_in_output で確かめている。
+    """
     selected_project = project(base(0))
     host = selected_project.objects[0]
 
     selected = aviutl2.render(selected_project, [0], selected=host)
-    output = aviutl2.render(selected_project, [0])
 
     assert selected.images[0].getbbox() is not None
-    assert output.images[0].getbbox() is None
 
 
 def test_guide_is_never_shown_when_disabled(aviutl2: AviUtl2) -> None:
@@ -916,12 +1010,20 @@ def test_guide_is_never_shown_when_disabled(aviutl2: AviUtl2) -> None:
     assert result.images[0].getbbox() is None
 
 
-@pytest.mark.parametrize("slots", GUIDE_CASES, ids=GUIDE_IDS)
-def test_guide_always_shown(aviutl2: AviUtl2, slots: tuple[Effect, ...]) -> None:
-    """「案内の表示」が「常に」なら、出力にも案内が表示される。見た目は基準画像（目視で確認済み）と比べる。"""
-    result = aviutl2.render(project(base(0, guide="常に"), *slots), [0])
+def test_guide_always_shown(aviutl2: AviUtl2) -> None:
+    """「案内の表示」が「常に」なら、出力にも案内が表示される。見た目は基準画像（目視で確認済み）と比べる。
 
-    assert result.images[0].getbbox() is not None
+    GUIDE_CASES の順に1フレームずつ描くので、基準画像の frame_0000n は n 番目のケース。
+    """
+    result = aviutl2.render(
+        cases_project([(base(0, guide="常に"), *slots) for slots in GUIDE_CASES.values()]),
+        list(range(len(GUIDE_CASES))),
+    )
+
+    nothing_drawn = [
+        case_id for frame, case_id in enumerate(GUIDE_CASES) if result.images[frame].getbbox() is None
+    ]
+    assert nothing_drawn == [], "案内が出ていない"
     aviutl2.assert_snapshot(result)
 
 
