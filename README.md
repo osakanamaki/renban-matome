@@ -1,6 +1,8 @@
 # 連番まとめ（AviUtl2 スクリプト）
 
-> 開発中です。
+[![最新リリース](https://img.shields.io/github/v/release/osakanamaki/renban-matome?label=release)](https://github.com/osakanamaki/renban-matome/releases/latest)
+[![検証済みのAviUtl2](https://img.shields.io/badge/AviUtl2-2.1.17-blue)](https://spring-fragrance.mints.ne.jp/aviutl/)
+[![🐠ピルリナでテスト](https://img.shields.io/badge/tested%20with-%F0%9F%90%A0%E3%83%94%E3%83%AB%E3%83%AA%E3%83%8A-blue)](https://github.com/osakanamaki/aviutl2-pyrrhulina)
 
 AviUtl2 用のスクリプトです。
 
