@@ -18,7 +18,7 @@ dev = [
 package = false
 
 [tool.uv.sources]
-aviutl2-pyrrhulina = { url = "https://github.com/osakanamaki/aviutl2-pyrrhulina/releases/download/v0.2.1/aviutl2_pyrrhulina-0.2.1-py3-none-any.whl" }
+aviutl2-pyrrhulina = { url = "https://github.com/osakanamaki/aviutl2-pyrrhulina/releases/download/v0.2.2/aviutl2_pyrrhulina-0.2.2-py3-none-any.whl" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

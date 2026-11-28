@@ -1,0 +1,5 @@
+[
+  { "action": "download" },
+  { "action": "extract" },
+  { "action": "copy", "from": "{tmp}/Script/連番まとめ", "to": "{scriptsDir}/連番まとめ" }
+]

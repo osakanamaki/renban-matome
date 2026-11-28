@@ -4,15 +4,15 @@ requires-python = ">=3.12"
 
 [[package]]
 name = "aviutl2-pyrrhulina"
-version = "0.2.1"
-source = { url = "https://github.com/osakanamaki/aviutl2-pyrrhulina/releases/download/v0.2.1/aviutl2_pyrrhulina-0.2.1-py3-none-any.whl" }
+version = "0.2.2"
+source = { url = "https://github.com/osakanamaki/aviutl2-pyrrhulina/releases/download/v0.2.2/aviutl2_pyrrhulina-0.2.2-py3-none-any.whl" }
 dependencies = [
     { name = "pillow" },
     { name = "pytest" },
     { name = "xxhash" },
 ]
 wheels = [
-    { url = "https://github.com/osakanamaki/aviutl2-pyrrhulina/releases/download/v0.2.1/aviutl2_pyrrhulina-0.2.1-py3-none-any.whl", hash = "sha256:0b6f20b187d2b8d713b2af864c7850d4f15cfb3eb8da236c28e5ebf9badaea3b" },
+    { url = "https://github.com/osakanamaki/aviutl2-pyrrhulina/releases/download/v0.2.2/aviutl2_pyrrhulina-0.2.2-py3-none-any.whl", hash = "sha256:74f9023f4dcd2bad62ad6821b4b920b4d8c011b513ac4874e849f215d6432178" },
 ]
 
 [package.metadata]
@@ -194,7 +194,7 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "aviutl2-pyrrhulina", url = "https://github.com/osakanamaki/aviutl2-pyrrhulina/releases/download/v0.2.1/aviutl2_pyrrhulina-0.2.1-py3-none-any.whl" },
+    { name = "aviutl2-pyrrhulina", url = "https://github.com/osakanamaki/aviutl2-pyrrhulina/releases/download/v0.2.2/aviutl2_pyrrhulina-0.2.2-py3-none-any.whl" },
     { name = "go-task-bin", specifier = ">=3.40" },
     { name = "pillow", specifier = ">=12.1" },
     { name = "ruff", specifier = ">=0.8" },

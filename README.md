@@ -19,7 +19,8 @@ AviUtl2 用のスクリプトです。
 
 ## 導入
 
-`script/` フォルダのファイルを、AviUtl2 の Script フォルダ（例：`C:\ProgramData\aviutl2\Script`）に置きます。
+[Releases](https://github.com/osakanamaki/renban-matome/releases/latest) から `renban-matome-vX.Y.Z.au2pkg.zip` をダウンロードし、展開せずに AviUtl2 のプレビュー画面にドラッグ＆ドロップします。
+手で入れるときは、zip の中の `Script\連番まとめ` フォルダを、AviUtl2 の Script フォルダ（例：`C:\ProgramData\aviutl2\Script`）に置きます。
 くわしくは Wiki の [導入](https://github.com/osakanamaki/renban-matome/wiki/導入) を参照してください。
 
 ## 最初の一歩
@@ -36,13 +37,20 @@ AviUtl2 用のスクリプトです。
 |---|---|
 | [連番まとめ（値）](https://github.com/osakanamaki/renban-matome/wiki/連番まとめ（値）) | 土台。「値」を8つ持ち、付いたスロットをまとめて描く |
 | [連番スロット](https://github.com/osakanamaki/renban-matome/wiki/連番スロット) | 値の番号の連番画像を表示する |
+| [連番スロット（ゲージ）](https://github.com/osakanamaki/renban-matome/wiki/連番スロット（ゲージ）) | 値を「ゲージの上限」に対する割合で、HP バーなどの連番画像に割り振る |
+| [静止画スロット](https://github.com/osakanamaki/renban-matome/wiki/静止画スロット) | 1枚の画像（アイコンや枠など）を、値に左右されず常に表示する |
 | [連番スロット（計算式）](https://github.com/osakanamaki/renban-matome/wiki/連番スロット（計算式）) | 表示する番号を計算式で決める |
 | [テキスト数値スロット](https://github.com/osakanamaki/renban-matome/wiki/テキスト数値スロット) | 値を文字で表示する |
 | [連番スロット（複製並べ）](https://github.com/osakanamaki/renban-matome/wiki/連番スロット（複製並べ）) | 1つの画像を、値で決まる数だけ並べる |
 
+## ニコニ・コモンズ
+
+ニコニ・コモンズの作品 ID は [nc516522](https://commons.nicovideo.jp/works/nc516522) です。
+動画などで使ったときは、親作品に登録していただけるとうれしいです（必須ではありません）。
+
 ## 開発
 
-開発環境の作り方は [docs/development.md](docs/development.md)、要件は [requirements.md](requirements.md) を参照してください。
+開発環境の作り方は [docs/development.md](docs/development.md)、配布と公開の手順は [docs/catalog.md](docs/catalog.md)、要件は [requirements.md](requirements.md) を参照してください。
 
 ## ライセンス
 

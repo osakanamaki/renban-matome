@@ -1,4 +1,4 @@
-"""連番まとめ（土台「連番まとめ（値）」＋スロット）を、要件定義書 1.6.12 の受け入れ基準で確かめる。
+"""連番まとめ（土台「連番まとめ（値）」＋スロット）を、要件定義書 1.6.14 の受け入れ基準で確かめる。
 
 証跡のパスが Windows の上限（260 文字）を超えると描画できないため、テスト名と id は短くする。
 """
@@ -16,6 +16,8 @@ SLOT = "連番スロット"
 FORMULA_SLOT = "連番スロット（計算式）"
 NUMBER_SLOT = "テキスト数値スロット"
 REPEAT_SLOT = "連番スロット（複製並べ）"
+GAUGE_SLOT = "連番スロット（ゲージ）"
+STILL_SLOT = "静止画スロット"
 # 土台が対応していない種類のスロット（案内の確認用）。
 UNKNOWN_SLOT = "_試験_未知のスロット"
 # 土台が使う kernel32 の関数を、違う型で先に ffi で宣言するカスタムオブジェクト（何も描かない）。
@@ -85,12 +87,46 @@ def formula_slot(image: Path | str, formula: str, *, outside: str = "表示し�
     return Effect(FORMULA_SLOT, params)
 
 
+def gauge_slot(image: Path | str = "", *, gauge_max: int = 100, count: int = 0, y: float = 0) -> Effect:
+    """連番スロット（ゲージ）。従う値は値1。gauge_max はゲージの上限、count は枚数（0 は自動）。"""
+    params: dict[str, object] = {
+        "画像": image,
+        "従う値": "値1",
+        "ゲージの上限": str(gauge_max),
+        "枚数": str(count),
+        "Y": f"{y:.1f}",
+    }
+    return Effect(GAUGE_SLOT, params)
+
+
+def still_slot(image: Path | str = "", *, x: float = 0, y: float = 0, scale: float = 100) -> Effect:
+    """静止画スロット。x・y は土台からのずれ、scale は拡大率（%）。"""
+    params: dict[str, object] = {
+        "画像": image,
+        "X": f"{x:.1f}",
+        "Y": f"{y:.1f}",
+        "拡大率": f"{scale:.2f}",
+    }
+    return Effect(STILL_SLOT, params)
+
+
 def number_slot(
-    text: str, *, text_color: str = "ffffff", decoration: str = "縁取り文字", x: float = 0
+    text: str,
+    *,
+    decimal: str = "四捨五入",
+    digits: int = 0,
+    text_color: str = "ffffff",
+    decoration: str = "縁取り文字",
+    x: float = 0,
 ) -> Effect:
-    """テキスト数値スロット。text_color は「テキスト」と同じ 16 進数の書き方。"""
+    """テキスト数値スロット。decimal は小数の扱い、digits は桁数（0 は「しない」）。
+
+    text_color は「テキスト」と同じ 16 進数の書き方。
+    """
     params: dict[str, object] = {
         "テキスト": text,
+        "小数の扱い": decimal,
+        "桁数": str(digits),
         "文字色": text_color,
         "文字装飾": decoration,
         "X": f"{x:.1f}",
@@ -355,8 +391,14 @@ def test_unset_slots_are_not_an_error(aviutl2: AviUtl2) -> None:
         ((3, 4), "値1 + 値2", 7),
         ((10,), "値1 * 53 / 100", 5),
         ((9,), "math.min(値1, 6)", 6),
+        ((20,), "値1 < 30 and 1 or 0", 1),
+        ((40,), "値1 < 30 and 1 or 0", 0),
+        ((120,), "値1 >= 100 and 2 or (値1 >= 50 and 1 or 0)", 2),
+        ((60,), "値1 >= 100 and 2 or (値1 >= 50 and 1 or 0)", 1),
+        # 100 * 0.29 は、計算の誤差で 28.999999999999996 になる。誤差を取り除いてから切り捨てる。
+        ((100,), "値1 * 0.29 - 20", 9),
     ],
-    ids=["minus", "sum", "ratio", "math"],
+    ids=["minus", "sum", "ratio", "math", "if_true", "if_false", "nested_2", "nested_1", "float_error"],
 )
 def test_formula(aviutl2: AviUtl2, values: tuple[int, ...], formula: str, expected: int) -> None:
     """RM-F30・RM-F31: 計算式の結果（小数点以下は切り捨て）を表示番号にする。"""
@@ -397,6 +439,7 @@ def test_formula_loop_counts_from_the_end(aviutl2: AviUtl2) -> None:
         "値9",
         "値1 +",
         "",
+        "値1 < 30",
     ],
     ids=[
         "io",
@@ -411,6 +454,7 @@ def test_formula_loop_counts_from_the_end(aviutl2: AviUtl2) -> None:
         "v9",
         "syntax",
         "empty",
+        "boolean",
     ],
 )
 def test_formula_rejected(aviutl2: AviUtl2, formula: str) -> None:
@@ -422,6 +466,129 @@ def test_formula_rejected(aviutl2: AviUtl2, formula: str) -> None:
     assert guided.images[0].getbbox() is not None
     assert count_pixels(guided.images[0], BAR_GREEN) == 0
     assert not guided.log_lines("script exception")
+
+
+# ---- 連番スロット（ゲージ） ----
+
+
+@pytest.mark.parametrize(
+    ("value", "gauge_max", "count", "expected"),
+    [
+        (0, 100, 0, 0),
+        (100, 100, 0, 10),
+        (55, 100, 0, 5),
+        (59, 100, 0, 5),
+        (150, 100, 0, 10),
+        (999, 100, 0, 10),
+        (7, 10, 0, 7),
+        (500, 500, 0, 10),
+        (100, 100, 5, 4),
+        (50, 100, 5, 2),
+    ],
+    ids=["empty", "full", "middle", "floor", "over", "over_999", "max_10", "max_500", "given", "given_half"],
+)
+def test_gauge(aviutl2: AviUtl2, value: int, gauge_max: int, count: int, expected: int) -> None:
+    """RM-F60: 表示番号は 切り捨て(値 × (枚数 - 1) ÷ ゲージの上限)。上限を超えた値は満タンのまま。"""
+    image = aviutl2.render(
+        project(base(value), gauge_slot(BAR, gauge_max=gauge_max, count=count)), [0]
+    ).images[0]
+
+    assert count_pixels(image, BAR_GREEN) == bar_pixels(expected)
+
+
+def test_gauge_counts_from_selected_image(aviutl2: AviUtl2) -> None:
+    """RM-F60: 枚数は、連番スロットと同じく選んだ画像から自動で数える（bar_004 から 7 枚）。"""
+    image = aviutl2.render(project(base(100), gauge_slot(SAMPLES / "bar" / "bar_004.png")), [0]).images[0]
+
+    # 7 枚なので、満タンは 6 番目（bar_010）。
+    assert count_pixels(image, BAR_GREEN) == bar_pixels(10)
+
+
+def test_gauge_hides_negative(aviutl2: AviUtl2) -> None:
+    """RM-F61: 値が負なら何も表示しない。-1 から 0 へ動かす途中（-0.5）も表示しない。"""
+    slots = (gauge_slot(BAR), gauge_slot(NUMBER, y=100))
+
+    # ログにエラーがあれば、render() が失敗する（allow_log_errors を渡していない）。
+    result = aviutl2.render(project(base("-1.00,0.00,直線移動,0"), *slots, end=2), [0, 1, 2])
+
+    assert result.images[0].getbbox() is None
+    assert result.images[1].getbbox() is None
+    assert count_pixels(result.images[2], BAR_GREEN) == bar_pixels(0)
+
+
+@pytest.mark.parametrize(
+    "image", ["", NOT_SEQUENTIAL, MISSING], ids=["no_image", "not_sequential", "missing"]
+)
+def test_gauge_guide(aviutl2: AviUtl2, image: Path | str) -> None:
+    """RM-F08: 画像が未設定・連番の規則に合わない・見つからないときは、連番スロットと同じ案内を出す。"""
+    gauge = aviutl2.render(project(base(0, guide="常に"), gauge_slot(image)), [0]).images[0]
+    sequence = aviutl2.render(project(base(0, guide="常に"), slot(image)), [0]).images[0]
+
+    assert gauge.getbbox() is not None
+    assert ImageChops.difference(gauge, sequence).getbbox() is None
+
+
+def test_gauge_given_count_beyond_files(aviutl2: AviUtl2) -> None:
+    """枚数を実際（11 枚）より多く指定し、無い番号の画像になったときは、何も表示しない。"""
+    image = aviutl2.render(project(base(100), gauge_slot(BAR, count=20)), [0]).images[0]
+
+    assert image.getbbox() is None
+
+
+# ---- 静止画スロット ----
+
+
+@pytest.fixture
+def still_image(tmp_path: Path) -> Path:
+    """番号の無いファイル名の、日本語を含む静止画（bar_007 の複製）。"""
+    path = tmp_path / "アイコン.png"
+    shutil.copyfile(SAMPLES / "bar" / "bar_007.png", path)
+    return path
+
+
+def test_still_ignores_values(aviutl2: AviUtl2, still_image: Path) -> None:
+    """RM-F70: 番号の無いファイル名の画像を、値に左右されず常に表示する（値が -1 でも 999 でも）。"""
+    effect = base("-1.00,999.00,直線移動,0", 5, 6, 7, 8, 9, 10, 11)
+
+    result = aviutl2.render(project(effect, still_slot(still_image), end=2), [0, 1, 2])
+
+    for frame in (0, 1, 2):
+        assert count_pixels(result.images[frame], BAR_GREEN) == bar_pixels(7), f"frame {frame}"
+
+
+def test_still_position_and_scale(aviutl2: AviUtl2, still_image: Path) -> None:
+    """RM-F17: 静止画スロットの X・Y・拡大率で、ずらした位置に指定の大きさで描く。"""
+    plain = aviutl2.render(project(base(0), still_slot(still_image)), [0]).images[0]
+    moved = aviutl2.render(project(base(0), still_slot(still_image, x=-100, y=50, scale=50)), [0]).images[0]
+
+    left, top, right, bottom = color_mask(plain, BAR_GREEN).getbbox()
+    moved_left, moved_top, moved_right, moved_bottom = color_mask(moved, BAR_GREEN).getbbox()
+    assert (moved_left + moved_right) / 2 == pytest.approx(320 - 100 + ((left + right) / 2 - 320) / 2, abs=2)
+    assert (moved_top + moved_bottom) / 2 == pytest.approx(240 + 50 + ((top + bottom) / 2 - 240) / 2, abs=2)
+    assert moved_right - moved_left == pytest.approx((right - left) / 2, abs=2)
+
+
+def test_still_with_other_slots(aviutl2: AviUtl2, still_image: Path) -> None:
+    """静止画スロットは、ほかのスロットと一緒に1つの土台で描ける。"""
+    effect = base(3)
+
+    image = aviutl2.render(
+        project(effect, still_slot(still_image, y=-150), slot(NUMBER), width=1280), [0]
+    ).images[0]
+
+    upper = image.crop((0, 0, 1280, 160))
+    assert count_pixels(upper, BAR_GREEN) == bar_pixels(7)
+    assert_number_at(image, 640, 3)
+
+
+@pytest.mark.parametrize("image", ["", MISSING], ids=["no_image", "missing"])
+def test_still_guide(aviutl2: AviUtl2, image: Path | str) -> None:
+    """RM-F08: 画像が未設定・見つからないときは、連番スロットと同じ案内を出す。"""
+    still = aviutl2.render(project(base(0, guide="常に"), still_slot(image)), [0]).images[0]
+    sequence = aviutl2.render(project(base(0, guide="常に"), slot(image)), [0]).images[0]
+
+    assert still.getbbox() is not None
+    assert ImageChops.difference(still, sequence).getbbox() is None
 
 
 # ---- テキスト数値スロット ----
@@ -467,21 +634,74 @@ def test_number_rejected_formula(aviutl2: AviUtl2) -> None:
 
 
 @pytest.mark.parametrize(
-    ("value", "formula", "expected_text"),
+    ("value", "formula", "decimal", "digits", "expected_text"),
     [
-        (0, "{値1 * -1}", "0"),
-        (1, "{値1 * 2^53}", "9007199254740992"),
-        (1, "{値1 * 1e20}", "1e+20"),
-        (1, "{値1 / 4}", "0.25"),
+        (0, "{値1 * -1}", "四捨五入", 0, "0"),
+        (1, "{値1 * 2^53}", "四捨五入", 0, "9007199254740992"),
+        (1, "{値1 * 1e20}", "四捨五入", 0, "1e+20"),
+        (1, "{値1 * 1e20}", "小数第2位まで", 10, "1e+20"),
+        (100, "{値1 / 3}", "四捨五入", 0, "33"),
+        (100, "{値1 / 3}", "小数第1位まで", 0, "33.3"),
+        (100, "{値1 / 6}", "切り捨て", 0, "16"),
+        (100, "{値1 / 6}", "四捨五入", 0, "17"),
+        (100, "{値1 / 6}", "小数第2位まで", 0, "16.67"),
+        (100, "{値1 / 20}", "四捨五入", 3, "005"),
+        (100, "{値1 / 20}", "小数第1位まで", 0, "5.0"),
+        (100, "{値1 / 400}", "小数第1位まで", 0, "0.3"),
+        (100, "{値1 / 1000}", "小数第2位まで", 0, "0.10"),
+        (100, "{値1 / 8}", "小数第1位まで", 3, "012.5"),
+        (100, "{値1 * -7 / 100}", "四捨五入", 3, "-007"),
+        (100, "{値1 * -1 / 6}", "切り捨て", 0, "-16"),
+        (100, "{値1 * -1 / 6}", "四捨五入", 0, "-17"),
+        (100, "{値1 * -1 / 40}", "四捨五入", 0, "-3"),
+        (100, "{値1 * -1 / 250}", "四捨五入", 0, "0"),
+        (100, "{値1}", "四捨五入", 10, "0000000100"),
+        (100, "{値1 * 100000000}", "四捨五入", 10, "10000000000"),
+        (100, "HP {値1} / {値1 / 4}", "四捨五入", 3, "HP 100 / 025"),
+        # 計算の誤差（100 * 0.29 は 28.999999999999996 になる）を取り除いてから丸める。
+        (100, "{値1 * 0.29}", "切り捨て", 0, "29"),
+        (10, "{値1 * 0.1005}-{1.005}", "小数第2位まで", 0, "1.01-1.01"),
+        (1, "{値1 * -1.005}", "小数第2位まで", 0, "-1.01"),
     ],
-    ids=["minus_zero", "exact_limit", "huge", "fraction"],
+    ids=[
+        "minus_zero",
+        "exact_limit",
+        "huge",
+        "huge_styled",
+        "round",
+        "one_place",
+        "truncate",
+        "round_up",
+        "two_places",
+        "pad",
+        "one_place_zero",
+        "one_place_half",
+        "two_places_zero",
+        "pad_fraction",
+        "pad_negative",
+        "truncate_negative",
+        "round_negative",
+        "round_negative_half",
+        "round_to_zero",
+        "pad_max",
+        "longer_than_digits",
+        "every_formula",
+        "float_truncate",
+        "float_round",
+        "float_round_negative",
+    ],
 )
-def test_number_format(aviutl2: AviUtl2, value: int, formula: str, expected_text: str) -> None:
-    """計算結果は、整数なら全桁で、全桁を正確に表せない大きな数や小数なら Lua の書き方で表示される。
+def test_number_format(
+    aviutl2: AviUtl2, value: int, formula: str, decimal: str, digits: int, expected_text: str
+) -> None:
+    """RM-F43・RM-F44: 計算結果は、小数の扱いで丸め、桁数に満たない整数部分の前を 0 で埋めて表示される。
 
+    全桁を正確に表せない大きな数は、Lua の書き方で表示される。
     計算式を書いたテキストと、期待する文字をそのまま書いたテキストの描画を比べる。
     """
-    actual = aviutl2.render(project(base(value), number_slot(formula)), [0]).images[0]
+    actual = aviutl2.render(
+        project(base(value), number_slot(formula, decimal=decimal, digits=digits)), [0]
+    ).images[0]
     expected = aviutl2.render(project(base(value), number_slot(expected_text)), [0]).images[0]
 
     assert actual.getbbox() is not None

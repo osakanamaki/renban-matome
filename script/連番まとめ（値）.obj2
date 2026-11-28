@@ -36,8 +36,16 @@
 --   計算式は、値1〜値8 と数学の関数だけが見える環境で実行する。それ以外の名前（io など）や、
 --   文字列・表・繰り返しを書くための記号と予約語を含む計算式は、実行せずに案内を出す。
 --
+-- 連番スロット（ゲージ）:
+--   表示番号 = 切り捨て(従う値 × (枚数 - 1) ÷ ゲージの上限)。0 で最初の画像、上限で最後の画像。
+--   値が負なら表示しない。上限より大きければ、最後の画像（満タン）のまま。
+--
+-- 静止画スロット:
+--   選んだ画像を、値に左右されず常に描く。ファイル名に番号は要らない。
+--
 -- テキスト数値スロット:
 --   テキストの中の {計算式} を計算結果に置き換えて、文字として描く（例: "HP {値1}"）。
+--   計算結果は、「小数の扱い」で丸め、「桁数」に満たない整数部分の前を 0 で埋めて書く。
 --
 -- 連番スロット（複製並べ）:
 --   画像を選ぶ値で画像を決め（連番スロットと同じ規則。範囲外は表示しない）、数を決める値の数だけ並べる。
@@ -56,6 +64,16 @@ local SLOT_KIND_SEQUENCE = "連番"
 local SLOT_KIND_FORMULA = "計算式"
 local SLOT_KIND_NUMBER = "数値"
 local SLOT_KIND_REPEAT = "並べ"
+local SLOT_KIND_GAUGE = "ゲージ"
+local SLOT_KIND_STILL = "静止画"
+-- 画像を使うスロットの種類（「スロットに、画像を設定してください。」の案内の対象）。
+local IMAGE_SLOT_KINDS = {
+	[SLOT_KIND_SEQUENCE] = true,
+	[SLOT_KIND_FORMULA] = true,
+	[SLOT_KIND_REPEAT] = true,
+	[SLOT_KIND_GAUGE] = true,
+	[SLOT_KIND_STILL] = true,
+}
 -- 連番スロット（複製並べ）で並べる数の上限（多すぎると重くなるため）。
 local MAX_REPEAT_COUNT = 100
 
@@ -352,16 +370,26 @@ local function has_image(effect_key)
 	return type(image_path) == "string" and image_path ~= ""
 end
 
+-- 選んだ画像が、連番の画像として使えるかを確かめる。
+-- 戻り値: 使えるなら nil、使えないなら案内の文
+local function find_selected_image_problem(image_path)
+	if split_image_path(image_path) == nil then
+		return "連番として扱えないファイル名です：" .. file_name_of(image_path) .. "\n（拡張子の直前に番号が必要です）"
+	end
+	if not file_exists(image_path) then
+		return "選んだ画像が見つかりません：" .. file_name_of(image_path)
+	end
+	return nil
+end
+
 -- 画像を使うスロットの、表示する画像のパスを決める。
 -- out_of_range は範囲外の扱い、image_count は枚数（0 以下なら自動で数える）。
 -- 戻り値: 画像のパス（表示しないときは nil）、案内の文（不備が無いときは nil）
 local function resolve_image_path(effect_key, display_number, out_of_range, image_count)
 	local image_path = read_item(effect_key, "画像")
-	if split_image_path(image_path) == nil then
-		return nil, "連番として扱えないファイル名です：" .. file_name_of(image_path) .. "\n（拡張子の直前に番号が必要です）"
-	end
-	if not file_exists(image_path) then
-		return nil, "選んだ画像が見つかりません：" .. file_name_of(image_path)
+	local problem = find_selected_image_problem(image_path)
+	if problem ~= nil then
+		return nil, problem
 	end
 	if image_count <= 0 then
 		-- 枚数の指定が無い。
@@ -459,6 +487,22 @@ local function evaluate_formula(formula, values)
 	return number, nil
 end
 
+-- 計算の誤差を取り除くときの、有効数字の桁数（tostring() で書くときと同じ 14 桁）。
+local FLOAT_ERROR_SIGNIFICANT_DIGITS = 14
+-- これより大きい数は、誤差を取り除かない（14 桁で丸めると、整数部分の桁まで変わるおそれがあるため）。
+local FLOAT_ERROR_LIMIT = 1e12
+
+-- 小数の計算の誤差を、有効数字 14 桁で丸めて取り除く。
+-- Lua の数は2進数の小数なので、10進数の小数を正確に表せない。そのため、100 * 0.29 は 29 ではなく
+-- 28.999999999999996 になり、そのまま切り捨てると 28 になる。tostring() と同じ有効数字 14 桁で丸めて 29 に戻す。
+-- 整数は、もともと誤差が無いので、そのまま返す。
+local function remove_float_error(number)
+	if number == math.floor(number) or math.abs(number) >= FLOAT_ERROR_LIMIT then
+		return number
+	end
+	return tonumber(string.format("%." .. FLOAT_ERROR_SIGNIFICANT_DIGITS .. "g", number))
+end
+
 -- 連番スロット1つを読み、描くものを決める。
 -- 戻り値: 描くものの配列、案内の文（不備が無いときは nil）
 local function resolve_sequence_slot(effect_key, values)
@@ -495,7 +539,7 @@ local function resolve_formula_slot(effect_key, values)
 	end
 	local path, image_guide_line = resolve_image_path(
 		effect_key,
-		math.floor(result),
+		math.floor(remove_float_error(result)),
 		read_text(effect_key, "範囲外の扱い"),
 		to_integer(read_item(effect_key, "枚数"))
 	)
@@ -504,6 +548,65 @@ local function resolve_formula_slot(effect_key, values)
 	end
 	local placement = read_slot_placement(effect_key)
 	return { { kind = "image", path = path, x = placement.x, y = placement.y, scale = placement.scale } }, nil
+end
+
+-- 連番スロット（ゲージ）1つを読み、描くものを決める。
+-- 値 0 で最初の画像、ゲージの上限で最後の画像を表示し、途中は値に比例して割り振る（切り捨て）。
+-- 値が負なら表示せず、上限より大きければ満タン（最後の画像）のままにする。
+-- 戻り値: 描くものの配列、案内の文（不備が無いときは nil）
+local function resolve_gauge_slot(effect_key, values)
+	if not has_image(effect_key) then
+		return {}, nil
+	end
+	local source_name = read_item(effect_key, "従う値")
+	local value_number = value_number_of(source_name)
+	if value_number == nil then
+		return {}, "この土台には「" .. tostring(source_name) .. "」がありません。"
+	end
+	local image_path = read_item(effect_key, "画像")
+	local problem = find_selected_image_problem(image_path)
+	if problem ~= nil then
+		return {}, problem
+	end
+	local gauge_max = to_integer(read_item(effect_key, "ゲージの上限"))
+	if gauge_max < 1 then
+		-- 設定画面では 1 より小さくできない。.anm2 を書き換えた場合などに、0 で割らないための守り。
+		return {}, nil
+	end
+	local value = values[value_number]
+	if value < 0 then
+		return {}, nil
+	end
+	if value > gauge_max then
+		value = gauge_max
+	end
+	local image_count = to_integer(read_item(effect_key, "枚数"))
+	if image_count <= 0 then
+		image_count = image_count_of(image_path)
+	end
+	-- 掛け算を先にする（値 ÷ 上限 を先にすると、浮動小数点の誤差で 1 つ手前の番号になることがある）。
+	local display_number = math.floor(value * (image_count - 1) / gauge_max)
+	local path = build_image_path(image_path, display_number)
+	if not file_exists(path) then
+		-- 枚数の指定が、実際の枚数より多い。
+		return {}, nil
+	end
+	local placement = read_slot_placement(effect_key)
+	return { { kind = "image", path = path, x = placement.x, y = placement.y, scale = placement.scale } }, nil
+end
+
+-- 静止画スロット1つを読み、描くものを決める。値に左右されず、選んだ画像をそのまま描く。
+-- 戻り値: 描くものの配列、案内の文（不備が無いときは nil）
+local function resolve_still_slot(effect_key)
+	if not has_image(effect_key) then
+		return {}, nil
+	end
+	local image_path = read_item(effect_key, "画像")
+	if not file_exists(image_path) then
+		return {}, "選んだ画像が見つかりません：" .. file_name_of(image_path)
+	end
+	local placement = read_slot_placement(effect_key)
+	return { { kind = "image", path = image_path, x = placement.x, y = placement.y, scale = placement.scale } }, nil
 end
 
 -- 連番スロット（複製並べ）1つを読み、描くものを決める。並べる数だけ、同じ画像を描くものにする。
@@ -603,23 +706,65 @@ end
 -- 全桁を正確に表せる整数の上限（Lua の数は倍精度の浮動小数点数で、仮数は 53 bit）。
 local EXACT_INTEGER_LIMIT = 2 ^ 53
 
--- 計算結果を、表示する文字にする。整数なら小数点を付けない。
-local function format_number(number)
-	if number == 0 then
-		-- -0 を "-0" と書かないように、0 として書く。
-		return "0"
+-- テキスト数値スロットの「小数の扱い」の選択肢と、小数点以下に書く桁数。
+local DECIMAL_MODE_ROUND = "四捨五入"
+local DECIMAL_MODE_TRUNCATE = "切り捨て"
+local DECIMAL_PLACES_BY_MODE = {
+	[DECIMAL_MODE_ROUND] = 0,
+	[DECIMAL_MODE_TRUNCATE] = 0,
+	["小数第1位まで"] = 1,
+	["小数第2位まで"] = 2,
+}
+-- テキスト数値スロットの「桁数」の上限。
+local MAX_DIGITS = 10
+
+-- 計算結果を、表示する文字にする。
+-- decimal_mode は小数の扱い（四捨五入・切り捨ては整数に、小数第1位・第2位までは四捨五入してその桁まで書く）。
+-- digits は桁数（整数部分がこの桁数に満たないとき、前を 0 で埋める。0 なら埋めない）。
+-- 例: 33.33 を「小数第1位まで」で "33.3"、5 を「小数第1位まで」で "5.0"、-7 を桁数 3 で "-007"
+local function format_number(number, decimal_mode, digits)
+	local decimal_places = DECIMAL_PLACES_BY_MODE[decimal_mode] or 0
+	-- 符号を外した大きさを、小数点以下の桁数の分だけ大きくして、整数に丸める。
+	-- 四捨五入は 0 から遠いほうへ（-2.5 は -3）、切り捨ては 0 に近いほうへ（-16.7 は -16）丸める。
+	-- 小数点の位置を動かした後で、計算の誤差を取り除く（1.005 * 100 が 100.49999999999999 になるため）。
+	local scaled = remove_float_error(math.abs(number) * 10 ^ decimal_places)
+	if decimal_mode == DECIMAL_MODE_TRUNCATE then
+		scaled = math.floor(scaled)
+	else
+		scaled = math.floor(scaled + 0.5)
 	end
-	if number == math.floor(number) and math.abs(number) <= EXACT_INTEGER_LIMIT then
-		-- %d は 64bit 整数に収まらない数を正しく書けないため、小数点以下 0 桁の %.0f で書く。
-		return string.format("%.0f", number)
+	if scaled > EXACT_INTEGER_LIMIT then
+		-- 全桁を正確に表せない大きな数は、Lua の書き方（有効数字 14 桁、必要なら指数の形）にする。
+		return tostring(number)
 	end
-	-- 小数と、全桁を正確に表せない大きな整数は、Lua の書き方（有効数字 14 桁、必要なら指数の形）にする。
-	return tostring(number)
+	-- %d は 64bit 整数に収まらない数を正しく書けないため、小数点以下 0 桁の %.0f で書く。
+	local scaled_text = string.format("%.0f", scaled)
+	local integer_text = scaled_text
+	local fraction_text = ""
+	if decimal_places > 0 then
+		-- 0.05 のように 1 より小さい数でも整数部分の 0 が残るよう、足りない桁を前に 0 で足してから分ける。
+		if string.len(scaled_text) <= decimal_places then
+			scaled_text = string.rep("0", decimal_places + 1 - string.len(scaled_text)) .. scaled_text
+		end
+		local integer_length = string.len(scaled_text) - decimal_places
+		integer_text = string.sub(scaled_text, 1, integer_length)
+		fraction_text = "." .. string.sub(scaled_text, integer_length + 1)
+	end
+	if string.len(integer_text) < digits then
+		integer_text = string.rep("0", digits - string.len(integer_text)) .. integer_text
+	end
+	-- 丸めて 0 になった数（-0.4 や -0）は、"-0" と書かないように符号を付けない。
+	local sign = ""
+	if number < 0 and scaled > 0 then
+		sign = "-"
+	end
+	return sign .. integer_text .. fraction_text
 end
 
 -- テキストの中の {計算式} を、計算結果に置き換える。
+-- number_style は計算結果の書き方 { decimal_mode = 小数の扱い, digits = 桁数 }。
 -- 戻り値: 置き換えたテキスト（計算できない部分があれば nil）、案内の文（問題が無ければ nil）
-local function fill_text(text, values)
+local function fill_text(text, values, number_style)
 	local guide_line = nil
 	local filled = string.gsub(text, "{(.-)}", function(formula)
 		local result, formula_guide_line = evaluate_formula(formula, values)
@@ -627,7 +772,7 @@ local function fill_text(text, values)
 			guide_line = guide_line or formula_guide_line
 			return ""
 		end
-		return format_number(result)
+		return format_number(result, number_style.decimal_mode, number_style.digits)
 	end)
 	if guide_line ~= nil then
 		return nil, guide_line
@@ -642,7 +787,14 @@ local function resolve_number_slot(effect_key, values)
 	if type(text) ~= "string" or text == "" then
 		return {}, nil
 	end
-	local filled, guide_line = fill_text(text, values)
+	local digits = to_integer(read_item(effect_key, "桁数"))
+	if digits < 0 then
+		digits = 0
+	elseif digits > MAX_DIGITS then
+		digits = MAX_DIGITS
+	end
+	local number_style = { decimal_mode = read_text(effect_key, "小数の扱い"), digits = digits }
+	local filled, guide_line = fill_text(text, values, number_style)
 	if filled == nil then
 		return {}, guide_line
 	end
@@ -707,26 +859,24 @@ for slot_index = 1, #slot_effects do
 	local slot_effect = slot_effects[slot_index]
 	local items = {}
 	local guide_line = nil
-	if slot_effect.kind == SLOT_KIND_SEQUENCE then
+	if IMAGE_SLOT_KINDS[slot_effect.kind] then
 		image_slot_count = image_slot_count + 1
 		if has_image(slot_effect.effect_key) then
 			has_any_image = true
 		end
+	end
+	if slot_effect.kind == SLOT_KIND_SEQUENCE then
 		items, guide_line = resolve_sequence_slot(slot_effect.effect_key, values)
 	elseif slot_effect.kind == SLOT_KIND_FORMULA then
-		image_slot_count = image_slot_count + 1
-		if has_image(slot_effect.effect_key) then
-			has_any_image = true
-		end
 		items, guide_line = resolve_formula_slot(slot_effect.effect_key, values)
 	elseif slot_effect.kind == SLOT_KIND_NUMBER then
 		items, guide_line = resolve_number_slot(slot_effect.effect_key, values)
 	elseif slot_effect.kind == SLOT_KIND_REPEAT then
-		image_slot_count = image_slot_count + 1
-		if has_image(slot_effect.effect_key) then
-			has_any_image = true
-		end
 		items, guide_line = resolve_repeat_slot(slot_effect.effect_key, values)
+	elseif slot_effect.kind == SLOT_KIND_GAUGE then
+		items, guide_line = resolve_gauge_slot(slot_effect.effect_key, values)
+	elseif slot_effect.kind == SLOT_KIND_STILL then
+		items, guide_line = resolve_still_slot(slot_effect.effect_key)
 	else
 		guide_line = "この土台は「" .. slot_effect.kind .. "」のスロットに対応していません。"
 	end
@@ -740,7 +890,7 @@ end
 if #slot_effects == 0 then
 	guide_lines[#guide_lines + 1] = "フィルタ効果「連番スロット」などを追加してください。"
 elseif image_slot_count > 0 and not has_any_image then
-	guide_lines[#guide_lines + 1] = "スロットに、連番の画像を設定してください。"
+	guide_lines[#guide_lines + 1] = "スロットに、画像を設定してください。"
 end
 
 local show_guide = #guide_lines > 0 and should_show_guide()
