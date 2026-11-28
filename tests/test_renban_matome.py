@@ -395,8 +395,10 @@ def test_unset_slots_are_not_an_error(aviutl2: AviUtl2) -> None:
         ((40,), "値1 < 30 and 1 or 0", 0),
         ((120,), "値1 >= 100 and 2 or (値1 >= 50 and 1 or 0)", 2),
         ((60,), "値1 >= 100 and 2 or (値1 >= 50 and 1 or 0)", 1),
+        # 100 * 0.29 は、計算の誤差で 28.999999999999996 になる。誤差を取り除いてから切り捨てる。
+        ((100,), "値1 * 0.29 - 20", 9),
     ],
-    ids=["minus", "sum", "ratio", "math", "if_true", "if_false", "nested_2", "nested_1"],
+    ids=["minus", "sum", "ratio", "math", "if_true", "if_false", "nested_2", "nested_1", "float_error"],
 )
 def test_formula(aviutl2: AviUtl2, values: tuple[int, ...], formula: str, expected: int) -> None:
     """RM-F30・RM-F31: 計算式の結果（小数点以下は切り捨て）を表示番号にする。"""
@@ -656,6 +658,10 @@ def test_number_rejected_formula(aviutl2: AviUtl2) -> None:
         (100, "{値1}", "四捨五入", 10, "0000000100"),
         (100, "{値1 * 100000000}", "四捨五入", 10, "10000000000"),
         (100, "HP {値1} / {値1 / 4}", "四捨五入", 3, "HP 100 / 025"),
+        # 計算の誤差（100 * 0.29 は 28.999999999999996 になる）を取り除いてから丸める。
+        (100, "{値1 * 0.29}", "切り捨て", 0, "29"),
+        (10, "{値1 * 0.1005}-{1.005}", "小数第2位まで", 0, "1.01-1.01"),
+        (1, "{値1 * -1.005}", "小数第2位まで", 0, "-1.01"),
     ],
     ids=[
         "minus_zero",
@@ -680,6 +686,9 @@ def test_number_rejected_formula(aviutl2: AviUtl2) -> None:
         "pad_max",
         "longer_than_digits",
         "every_formula",
+        "float_truncate",
+        "float_round",
+        "float_round_negative",
     ],
 )
 def test_number_format(

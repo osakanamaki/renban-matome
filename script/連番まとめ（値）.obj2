@@ -487,6 +487,22 @@ local function evaluate_formula(formula, values)
 	return number, nil
 end
 
+-- 計算の誤差を取り除くときの、有効数字の桁数（tostring() で書くときと同じ 14 桁）。
+local FLOAT_ERROR_SIGNIFICANT_DIGITS = 14
+-- これより大きい数は、誤差を取り除かない（14 桁で丸めると、整数部分の桁まで変わるおそれがあるため）。
+local FLOAT_ERROR_LIMIT = 1e12
+
+-- 小数の計算の誤差を、有効数字 14 桁で丸めて取り除く。
+-- Lua の数は2進数の小数なので、10進数の小数を正確に表せない。そのため、100 * 0.29 は 29 ではなく
+-- 28.999999999999996 になり、そのまま切り捨てると 28 になる。tostring() と同じ有効数字 14 桁で丸めて 29 に戻す。
+-- 整数は、もともと誤差が無いので、そのまま返す。
+local function remove_float_error(number)
+	if number == math.floor(number) or math.abs(number) >= FLOAT_ERROR_LIMIT then
+		return number
+	end
+	return tonumber(string.format("%." .. FLOAT_ERROR_SIGNIFICANT_DIGITS .. "g", number))
+end
+
 -- 連番スロット1つを読み、描くものを決める。
 -- 戻り値: 描くものの配列、案内の文（不備が無いときは nil）
 local function resolve_sequence_slot(effect_key, values)
@@ -523,7 +539,7 @@ local function resolve_formula_slot(effect_key, values)
 	end
 	local path, image_guide_line = resolve_image_path(
 		effect_key,
-		math.floor(result),
+		math.floor(remove_float_error(result)),
 		read_text(effect_key, "範囲外の扱い"),
 		to_integer(read_item(effect_key, "枚数"))
 	)
@@ -710,7 +726,8 @@ local function format_number(number, decimal_mode, digits)
 	local decimal_places = DECIMAL_PLACES_BY_MODE[decimal_mode] or 0
 	-- 符号を外した大きさを、小数点以下の桁数の分だけ大きくして、整数に丸める。
 	-- 四捨五入は 0 から遠いほうへ（-2.5 は -3）、切り捨ては 0 に近いほうへ（-16.7 は -16）丸める。
-	local scaled = math.abs(number) * 10 ^ decimal_places
+	-- 小数点の位置を動かした後で、計算の誤差を取り除く（1.005 * 100 が 100.49999999999999 になるため）。
+	local scaled = remove_float_error(math.abs(number) * 10 ^ decimal_places)
 	if decimal_mode == DECIMAL_MODE_TRUNCATE then
 		scaled = math.floor(scaled)
 	else
