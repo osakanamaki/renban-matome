@@ -34,24 +34,23 @@ jobs:
           archive=$(uv run python tools/build-package.py)
           echo "archive=${archive}" >> "${GITHUB_OUTPUT}"
 
-      - name: カタログに登録するハッシュ値を出す
+      # ハッシュ値は本文に書くと長くて読みにくいので、ファイルにして配布物と一緒に載せる。
+      - name: カタログに登録するハッシュ値をファイルに出す
+        env:
+          # パスの日本語を、UTF-8 の JSON として書く。
+          PYTHONIOENCODING: utf-8
         run: |
-          uv run aviutl2-pyrrhulina-package "${{ steps.package.outputs.archive }}" install.json > files.json
+          uv run aviutl2-pyrrhulina-package "${{ steps.package.outputs.archive }}" install.json > dist/version.file.json
           {
             echo "## 配布物"
             echo
             echo "- \`$(basename "${{ steps.package.outputs.archive }}")\`：AviUtl2 のプレビューにドラッグ＆ドロップすると入ります。"
-            echo
-            echo "## 置かれるファイルの XXH3_128（AviUtl2 Catalog の version.file と同じ形）"
-            echo
-            echo '```json'
-            cat files.json
-            echo '```'
+            echo "- \`version.file.json\`：置かれるファイルの XXH3_128（AviUtl2 カタログのデータの version.file と同じ形）。"
           } > notes.md
 
       - name: Releases に載せる
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" "${{ steps.package.outputs.archive }}" \
+          gh release create "${GITHUB_REF_NAME}" "${{ steps.package.outputs.archive }}" dist/version.file.json \
             --title "${GITHUB_REF_NAME}" --notes-file notes.md --generate-notes

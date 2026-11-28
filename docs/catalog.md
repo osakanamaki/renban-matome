@@ -25,11 +25,12 @@ AviUtl2 Catalog は、同じ zip を [`install.json`](../install.json) の手順
 1. 手元で `task release-check` を通す（版と個人のパス、`script/` での試験、配布物を置いた試験）。
 2. `pyproject.toml` と各スクリプトの `--information` の版を上げたコミットを `main` に入れる。
 3. タグ `vX.Y.Z` を付けて push する。GitHub Actions（`.github/workflows/release.yml`）が、
-   版と個人のパスを確かめ、配布物を作り、Releases に載せる。本文に、置かれるファイルの XXH3_128 が書かれる。
+   版と個人のパスを確かめ、配布物を作り、Releases に載せる。置かれるファイルの XXH3_128 は、
+   カタログのデータ（`version.file`）と同じ形の `version.file.json` として、配布物と一緒に Releases に載る。
 
 ## カタログに登録する内容
 
-カタログアプリの登録フォームから申請します。項目と、入れる値は次のとおりです。
+カタログアプリの登録フォームから申請します（v0.3.0 で掲載済み）。項目と、入れる値は次のとおりです。
 
 | 項目 | 値 |
 |---|---|
@@ -47,7 +48,7 @@ AviUtl2 Catalog は、同じ zip を [`install.json`](../install.json) の手順
 | インストーラーの取得元 | GitHub Release：owner `osakanamaki`、repo `renban-matome`、正規表現 `^renban-matome-v\d+\.\d+\.\d+\.au2pkg\.zip$` |
 | インストール手順 | `download` → `extract` → `copy`（from `{tmp}/Script/連番まとめ`、to `{scriptsDir}/連番まとめ`） |
 | アンインストール手順 | `delete`（path `{scriptsDir}/連番まとめ`） |
-| バージョンのファイル | Releases の本文の XXH3_128 を写す |
+| バージョンのファイル | Releases の `version.file.json` を写す |
 
 ## 動くサムネイル
 
