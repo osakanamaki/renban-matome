@@ -1,0 +1,57 @@
+# タグ v* を push したら、配布物（.au2pkg.zip）を作って Releases に載せる。
+#
+# AviUtl2 を使う検査（task release-check）は GitHub Actions では回せないので、タグを付ける前に手元で行う。
+# ここでは、公開物に直接響くもの（版がそろっているか、個人のパスが無いか）だけを関門として確かめる。
+name: リリース
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: リポジトリを取り出す
+        uses: actions/checkout@v4
+
+      - name: uv を入れる
+        uses: astral-sh/setup-uv@v6
+
+      - name: 依存を入れる
+        run: uv sync --locked
+
+      - name: 版と個人のパスを確かめる
+        run: uv run python tools/check-release.py --tag "${GITHUB_REF_NAME}"
+
+      - name: 配布物を作る
+        id: package
+        run: |
+          archive=$(uv run python tools/build-package.py)
+          echo "archive=${archive}" >> "${GITHUB_OUTPUT}"
+
+      - name: カタログに登録するハッシュ値を出す
+        run: |
+          uv run aviutl2-pyrrhulina-package "${{ steps.package.outputs.archive }}" install.json > files.json
+          {
+            echo "## 配布物"
+            echo
+            echo "- \`$(basename "${{ steps.package.outputs.archive }}")\`：AviUtl2 のプレビューにドラッグ＆ドロップすると入ります。"
+            echo
+            echo "## 置かれるファイルの XXH3_128（AviUtl2 Catalog の version.file と同じ形）"
+            echo
+            echo '```json'
+            cat files.json
+            echo '```'
+          } > notes.md
+
+      - name: Releases に載せる
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" "${{ steps.package.outputs.archive }}" \
+            --title "${GITHUB_REF_NAME}" --notes-file notes.md --generate-notes

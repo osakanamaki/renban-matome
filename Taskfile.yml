@@ -11,3 +11,26 @@ tasks:
     desc: AviUtl2 を起動してスクリプトを検証する
     cmds:
       - uv run pytest {{.CLI_ARGS}}
+
+  package:
+    desc: 配布物（dist/renban-matome-vX.Y.Z.au2pkg.zip）を作る
+    cmds:
+      - uv run python tools/build-package.py
+
+  release-check:
+    desc: 公開前の検査（版と個人のパス、script/ での試験、配布物を置いた試験）
+    cmds:
+      - uv run python tools/check-release.py
+      - task: check
+      - uv run pytest
+      - task: package
+      # tests を明示すると、tests/conftest.py の --package を受け付ける。
+      - uv run pytest tests --package dist/renban-matome-v{{.VERSION}}.au2pkg.zip
+    vars:
+      VERSION:
+        sh: uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
+
+  thumbnail:
+    desc: AviUtl2 Catalog 用の動くサムネイル（docs/images/thumbnail.webp）を作る
+    cmds:
+      - uv run python tools/make-thumbnail.py

@@ -12,6 +12,8 @@ AviUtl2 のスクリプトはビルド不要です。所定のフォルダに置
 | `docs/` | 開発者向けの資料 |
 | `wiki/` | 利用者向けの Wiki の原稿。`main` に入ると、GitHub Actions（`.github/workflows/sync-wiki.yml`）が Wiki へ反映する。Wiki 上で直接書いた変更は上書きされる |
 | `local/` | 個人用の作業フォルダ（Git 管理外。実素材やプロジェクトファイルはここへ） |
+| `install.json` | AviUtl2 Catalog に登録するインストール手順。配布物を置いた試験にも使う（[catalog.md](catalog.md)） |
+| `dist/` | 配布物（`task package` が作る。Git 管理外） |
 
 ## 初回セットアップ
 
@@ -209,4 +211,14 @@ uv run task test
 
 ## 公開前のチェック
 
-- 個人のパス（ユーザー名を含むもの）や実素材が入っていないことを確認する。
+タグを付ける前に、手元で次を通します。手順の全体は [catalog.md](catalog.md) にあります。
+
+```sh
+uv run task release-check
+```
+
+- `tools/check-release.py`：`pyproject.toml` と各スクリプトの `--information` の版がそろっているか、Git で管理しているファイルに個人のパス（ユーザー名を含む絶対パス）が無いか。
+- `task check` と `pytest`：`script/` を置いた試験。
+- `task package` と `pytest tests --package dist/…au2pkg.zip`：配布物を `install.json` の手順どおりに置いた試験。最後に、カタログに登録する XXH3_128 が表示されます。
+
+実素材が入っていないことは、目で確かめてください。
