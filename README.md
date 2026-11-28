@@ -19,7 +19,9 @@ AviUtl2 用のスクリプトです。
 
 ## 導入
 
-[Releases](https://github.com/osakanamaki/renban-matome/releases/latest) から `renban-matome-vX.Y.Z.au2pkg.zip` をダウンロードし、展開せずに AviUtl2 のプレビュー画面にドラッグ＆ドロップします。
+[AviUtl2 カタログ](https://github.com/Neosku/aviutl2-catalog) で「連番まとめ」を検索して、インストールできます。
+
+カタログを使わないときは、[Releases](https://github.com/osakanamaki/renban-matome/releases/latest) から `renban-matome-vX.Y.Z.au2pkg.zip` をダウンロードし、展開せずに AviUtl2 のプレビュー画面にドラッグ＆ドロップします。
 手で入れるときは、zip の中の `Script\連番まとめ` フォルダを、AviUtl2 の Script フォルダ（例：`C:\ProgramData\aviutl2\Script`）に置きます。
 くわしくは Wiki の [導入](https://github.com/osakanamaki/renban-matome/wiki/導入) を参照してください。
 
