@@ -1,4 +1,4 @@
-"""連番まとめ（土台「連番まとめ（値）」＋スロット）を、要件定義書 1.6.12 の受け入れ基準で確かめる。
+"""連番まとめ（土台「連番まとめ（値）」＋スロット）を、要件定義書 1.6.13 の受け入れ基準で確かめる。
 
 証跡のパスが Windows の上限（260 文字）を超えると描画できないため、テスト名と id は短くする。
 """
@@ -16,6 +16,7 @@ SLOT = "連番スロット"
 FORMULA_SLOT = "連番スロット（計算式）"
 NUMBER_SLOT = "テキスト数値スロット"
 REPEAT_SLOT = "連番スロット（複製並べ）"
+GAUGE_SLOT = "連番スロット（ゲージ）"
 # 土台が対応していない種類のスロット（案内の確認用）。
 UNKNOWN_SLOT = "_試験_未知のスロット"
 # 土台が使う kernel32 の関数を、違う型で先に ffi で宣言するカスタムオブジェクト（何も描かない）。
@@ -83,6 +84,18 @@ def formula_slot(image: Path | str, formula: str, *, outside: str = "表示し�
         "X": f"{x:.1f}",
     }
     return Effect(FORMULA_SLOT, params)
+
+
+def gauge_slot(image: Path | str = "", *, gauge_max: int = 100, count: int = 0, y: float = 0) -> Effect:
+    """連番スロット（ゲージ）。従う値は値1。gauge_max はゲージの上限、count は枚数（0 は自動）。"""
+    params: dict[str, object] = {
+        "画像": image,
+        "従う値": "値1",
+        "ゲージの上限": str(gauge_max),
+        "枚数": str(count),
+        "Y": f"{y:.1f}",
+    }
+    return Effect(GAUGE_SLOT, params)
 
 
 def number_slot(
@@ -422,6 +435,73 @@ def test_formula_rejected(aviutl2: AviUtl2, formula: str) -> None:
     assert guided.images[0].getbbox() is not None
     assert count_pixels(guided.images[0], BAR_GREEN) == 0
     assert not guided.log_lines("script exception")
+
+
+# ---- 連番スロット（ゲージ） ----
+
+
+@pytest.mark.parametrize(
+    ("value", "gauge_max", "count", "expected"),
+    [
+        (0, 100, 0, 0),
+        (100, 100, 0, 10),
+        (55, 100, 0, 5),
+        (59, 100, 0, 5),
+        (150, 100, 0, 10),
+        (999, 100, 0, 10),
+        (7, 10, 0, 7),
+        (500, 500, 0, 10),
+        (100, 100, 5, 4),
+        (50, 100, 5, 2),
+    ],
+    ids=["empty", "full", "middle", "floor", "over", "over_999", "max_10", "max_500", "given", "given_half"],
+)
+def test_gauge(aviutl2: AviUtl2, value: int, gauge_max: int, count: int, expected: int) -> None:
+    """RM-F60: 表示番号は 切り捨て(値 × (枚数 - 1) ÷ ゲージの上限)。上限を超えた値は満タンのまま。"""
+    image = aviutl2.render(
+        project(base(value), gauge_slot(BAR, gauge_max=gauge_max, count=count)), [0]
+    ).images[0]
+
+    assert count_pixels(image, BAR_GREEN) == bar_pixels(expected)
+
+
+def test_gauge_counts_from_selected_image(aviutl2: AviUtl2) -> None:
+    """RM-F60: 枚数は、連番スロットと同じく選んだ画像から自動で数える（bar_004 から 7 枚）。"""
+    image = aviutl2.render(project(base(100), gauge_slot(SAMPLES / "bar" / "bar_004.png")), [0]).images[0]
+
+    # 7 枚なので、満タンは 6 番目（bar_010）。
+    assert count_pixels(image, BAR_GREEN) == bar_pixels(10)
+
+
+def test_gauge_hides_negative(aviutl2: AviUtl2) -> None:
+    """RM-F61: 値が負なら何も表示しない。-1 から 0 へ動かす途中（-0.5）も表示しない。"""
+    slots = (gauge_slot(BAR), gauge_slot(NUMBER, y=100))
+
+    # ログにエラーがあれば、render() が失敗する（allow_log_errors を渡していない）。
+    result = aviutl2.render(project(base("-1.00,0.00,直線移動,0"), *slots, end=2), [0, 1, 2])
+
+    assert result.images[0].getbbox() is None
+    assert result.images[1].getbbox() is None
+    assert count_pixels(result.images[2], BAR_GREEN) == bar_pixels(0)
+
+
+@pytest.mark.parametrize(
+    "image", ["", NOT_SEQUENTIAL, MISSING], ids=["no_image", "not_sequential", "missing"]
+)
+def test_gauge_guide(aviutl2: AviUtl2, image: Path | str) -> None:
+    """RM-F08: 画像が未設定・連番の規則に合わない・見つからないときは、連番スロットと同じ案内を出す。"""
+    gauge = aviutl2.render(project(base(0, guide="常に"), gauge_slot(image)), [0]).images[0]
+    sequence = aviutl2.render(project(base(0, guide="常に"), slot(image)), [0]).images[0]
+
+    assert gauge.getbbox() is not None
+    assert ImageChops.difference(gauge, sequence).getbbox() is None
+
+
+def test_gauge_given_count_beyond_files(aviutl2: AviUtl2) -> None:
+    """枚数を実際（11 枚）より多く指定し、無い番号の画像になったときは、何も表示しない。"""
+    image = aviutl2.render(project(base(100), gauge_slot(BAR, count=20)), [0]).images[0]
+
+    assert image.getbbox() is None
 
 
 # ---- テキスト数値スロット ----

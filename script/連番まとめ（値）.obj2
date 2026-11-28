@@ -36,6 +36,10 @@
 --   計算式は、値1〜値8 と数学の関数だけが見える環境で実行する。それ以外の名前（io など）や、
 --   文字列・表・繰り返しを書くための記号と予約語を含む計算式は、実行せずに案内を出す。
 --
+-- 連番スロット（ゲージ）:
+--   表示番号 = 切り捨て(従う値 × (枚数 - 1) ÷ ゲージの上限)。0 で最初の画像、上限で最後の画像。
+--   値が負なら表示しない。上限より大きければ、最後の画像（満タン）のまま。
+--
 -- テキスト数値スロット:
 --   テキストの中の {計算式} を計算結果に置き換えて、文字として描く（例: "HP {値1}"）。
 --
@@ -56,6 +60,14 @@ local SLOT_KIND_SEQUENCE = "連番"
 local SLOT_KIND_FORMULA = "計算式"
 local SLOT_KIND_NUMBER = "数値"
 local SLOT_KIND_REPEAT = "並べ"
+local SLOT_KIND_GAUGE = "ゲージ"
+-- 画像を使うスロットの種類（「スロットに、連番の画像を設定してください。」の案内の対象）。
+local IMAGE_SLOT_KINDS = {
+	[SLOT_KIND_SEQUENCE] = true,
+	[SLOT_KIND_FORMULA] = true,
+	[SLOT_KIND_REPEAT] = true,
+	[SLOT_KIND_GAUGE] = true,
+}
 -- 連番スロット（複製並べ）で並べる数の上限（多すぎると重くなるため）。
 local MAX_REPEAT_COUNT = 100
 
@@ -352,16 +364,26 @@ local function has_image(effect_key)
 	return type(image_path) == "string" and image_path ~= ""
 end
 
+-- 選んだ画像が、連番の画像として使えるかを確かめる。
+-- 戻り値: 使えるなら nil、使えないなら案内の文
+local function find_selected_image_problem(image_path)
+	if split_image_path(image_path) == nil then
+		return "連番として扱えないファイル名です：" .. file_name_of(image_path) .. "\n（拡張子の直前に番号が必要です）"
+	end
+	if not file_exists(image_path) then
+		return "選んだ画像が見つかりません：" .. file_name_of(image_path)
+	end
+	return nil
+end
+
 -- 画像を使うスロットの、表示する画像のパスを決める。
 -- out_of_range は範囲外の扱い、image_count は枚数（0 以下なら自動で数える）。
 -- 戻り値: 画像のパス（表示しないときは nil）、案内の文（不備が無いときは nil）
 local function resolve_image_path(effect_key, display_number, out_of_range, image_count)
 	local image_path = read_item(effect_key, "画像")
-	if split_image_path(image_path) == nil then
-		return nil, "連番として扱えないファイル名です：" .. file_name_of(image_path) .. "\n（拡張子の直前に番号が必要です）"
-	end
-	if not file_exists(image_path) then
-		return nil, "選んだ画像が見つかりません：" .. file_name_of(image_path)
+	local problem = find_selected_image_problem(image_path)
+	if problem ~= nil then
+		return nil, problem
 	end
 	if image_count <= 0 then
 		-- 枚数の指定が無い。
@@ -501,6 +523,51 @@ local function resolve_formula_slot(effect_key, values)
 	)
 	if path == nil then
 		return {}, image_guide_line
+	end
+	local placement = read_slot_placement(effect_key)
+	return { { kind = "image", path = path, x = placement.x, y = placement.y, scale = placement.scale } }, nil
+end
+
+-- 連番スロット（ゲージ）1つを読み、描くものを決める。
+-- 値 0 で最初の画像、ゲージの上限で最後の画像を表示し、途中は値に比例して割り振る（切り捨て）。
+-- 値が負なら表示せず、上限より大きければ満タン（最後の画像）のままにする。
+-- 戻り値: 描くものの配列、案内の文（不備が無いときは nil）
+local function resolve_gauge_slot(effect_key, values)
+	if not has_image(effect_key) then
+		return {}, nil
+	end
+	local source_name = read_item(effect_key, "従う値")
+	local value_number = value_number_of(source_name)
+	if value_number == nil then
+		return {}, "この土台には「" .. tostring(source_name) .. "」がありません。"
+	end
+	local image_path = read_item(effect_key, "画像")
+	local problem = find_selected_image_problem(image_path)
+	if problem ~= nil then
+		return {}, problem
+	end
+	local gauge_max = to_integer(read_item(effect_key, "ゲージの上限"))
+	if gauge_max < 1 then
+		-- 設定画面では 1 より小さくできない。.anm2 を書き換えた場合などに、0 で割らないための守り。
+		return {}, nil
+	end
+	local value = values[value_number]
+	if value < 0 then
+		return {}, nil
+	end
+	if value > gauge_max then
+		value = gauge_max
+	end
+	local image_count = to_integer(read_item(effect_key, "枚数"))
+	if image_count <= 0 then
+		image_count = image_count_of(image_path)
+	end
+	-- 掛け算を先にする（値 ÷ 上限 を先にすると、浮動小数点の誤差で 1 つ手前の番号になることがある）。
+	local display_number = math.floor(value * (image_count - 1) / gauge_max)
+	local path = build_image_path(image_path, display_number)
+	if not file_exists(path) then
+		-- 枚数の指定が、実際の枚数より多い。
+		return {}, nil
 	end
 	local placement = read_slot_placement(effect_key)
 	return { { kind = "image", path = path, x = placement.x, y = placement.y, scale = placement.scale } }, nil
@@ -707,26 +774,22 @@ for slot_index = 1, #slot_effects do
 	local slot_effect = slot_effects[slot_index]
 	local items = {}
 	local guide_line = nil
-	if slot_effect.kind == SLOT_KIND_SEQUENCE then
+	if IMAGE_SLOT_KINDS[slot_effect.kind] then
 		image_slot_count = image_slot_count + 1
 		if has_image(slot_effect.effect_key) then
 			has_any_image = true
 		end
+	end
+	if slot_effect.kind == SLOT_KIND_SEQUENCE then
 		items, guide_line = resolve_sequence_slot(slot_effect.effect_key, values)
 	elseif slot_effect.kind == SLOT_KIND_FORMULA then
-		image_slot_count = image_slot_count + 1
-		if has_image(slot_effect.effect_key) then
-			has_any_image = true
-		end
 		items, guide_line = resolve_formula_slot(slot_effect.effect_key, values)
 	elseif slot_effect.kind == SLOT_KIND_NUMBER then
 		items, guide_line = resolve_number_slot(slot_effect.effect_key, values)
 	elseif slot_effect.kind == SLOT_KIND_REPEAT then
-		image_slot_count = image_slot_count + 1
-		if has_image(slot_effect.effect_key) then
-			has_any_image = true
-		end
 		items, guide_line = resolve_repeat_slot(slot_effect.effect_key, values)
+	elseif slot_effect.kind == SLOT_KIND_GAUGE then
+		items, guide_line = resolve_gauge_slot(slot_effect.effect_key, values)
 	else
 		guide_line = "この土台は「" .. slot_effect.kind .. "」のスロットに対応していません。"
 	end
