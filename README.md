@@ -10,7 +10,7 @@ AviUtl2 用のスクリプトです。
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/usage-dark.svg">
-  <img src="docs/images/usage-light.svg" alt="使い方の図: 1. タイムラインの「オブジェクト追加」→「連番まとめ」→「連番まとめ（値）」を置いて土台にする。2. 土台のオブジェクト設定の [+] →「連番まとめ」から、連番スロットやテキスト数値スロットなどを付ける。3. 土台の値を動かすと、その値に従うスロットが一緒に切り替わる" width="880">
+  <img src="docs/images/usage-light.svg" alt="使い方の図: 1. タイムラインの「オブジェクト追加」→「連番まとめ」→「連番まとめ（値）」を置いて土台にする。2. 土台のオブジェクト設定の [+] →「連番まとめ」から、連番スロットやテキスト数値スロットなどを使いたい数だけ付ける。3. 土台の値1〜値8を動かすと、その値に従うスロットが一緒に切り替わる。" width="880">
 </picture>
 
 要件は [requirements.md](requirements.md) を参照してください。
